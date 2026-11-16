@@ -353,7 +353,7 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     scan = {"id": scan_id, "mode": mode, "started_at": iso(now), "status": "ok" if not errors else "partial", "data": {**health, "prices_as_of": asof, "tradable": len([1 for u in uni.values() if u.get("tradable")])},
             "market": mkt, "counts": counts, "positions": positions, "fill_checks": fill_checks, "alert_updates": alert_updates, "watchlist": watch[:12],
             "notes": notes, "errors": errors, "risk": gov, "funds": fund, "strategies_active": active, "strategies_paused": paused,
-            "signal_date": str(day_bar.date()), "engine": version.info(), "params_version": P.get("version")}
+            "signal_date": str(day_bar.date()), "engine": version.info(), "params_version": P.get("rev")}
     scan["headline"] = headline(scan, entries)
     scan["digest"] = digest(scan, entries, exit_alerts)
     _write(out, writes, "set", "scans", scan_id, scan)

@@ -214,7 +214,7 @@ def cmd_promote(data_dir, state_dir, out_dir) -> dict:
         notes.append(f"{r['id']} promoted: {ev['reason']} A+ in: " + (", ".join(c for c, v in cells.items() if v.get("grade") == "A+") or "none yet (watchlist grade)"))
     res = {"promoted": promoted, "note": " ".join(notes)}
     if promoted:
-        P["version"] = int(P.get("version", 0)) + 1
+        P["rev"] = int(P.get("rev", 0)) + 1
         C.write_docs_coll(out, [("strategy", "params", P)])
     (out / "promote_report.json").write_text(json.dumps(res, indent=1))
     print(json.dumps(res, indent=1))

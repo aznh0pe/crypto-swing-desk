@@ -183,7 +183,7 @@ def run_backtest(data_dir, state_params: dict | None = None, extra_specs: list |
     mk = ind["market"]
     cs = I.condition_series(mk).dropna()
     share = cs.value_counts(normalize=True).round(3).to_dict()
-    P.update({"calibrated_at": now_iso(), "data_through": str(ind["close"].index.max().date()), "version": int((state_params or {}).get("version", 0)) + 1})
+    P.update({"calibrated_at": now_iso(), "data_through": str(ind["close"].index.max().date()), "rev": int((state_params or {}).get("rev", 0)) + 1})
     report = {"generated_at": now_iso(), "data": {"first_bar": str(ind["close"].index.min().date()), "last_bar": str(ind["close"].index.max().date()),
                                                   "pairs": int(ind["close"].shape[1]), "liquid_today": int(ind["liquid"].iloc[-1].sum()), "source": meta.get("source")},
               "split": P["split"], "costs": P["costs"], "enable_rule": S.ENABLE_RULE, "specialist_rule": SPECIALIST,

@@ -13,7 +13,7 @@ SPLIT = "2023-01-01"     # training years end here; everything after is unseen d
 # The live-trading bar, after fees. Win rate comes first; profit factor and average trade keep it honest.
 ENABLE_RULE = {"train_win": 0.58, "train_pf": 1.30, "train_avg": 0.004, "train_n": 40, "train_day_win": 0.55, "oos_n": 20, "oos_pf": 1.10, "oos_decay": 0.08}
 DEFAULT_PARAMS = {
-    "version": 1, "split": SPLIT,
+    "rev": 0, "split": SPLIT,
     "costs": {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10},
     "risk": {"risk_pct": 2.0, "max_position_pct": 30.0, "max_open_positions": 4, "min_order_usd": 25.0, "max_per_day": 3},
     "manage": {"lock_atr": 2.0, "lock_to": 0.5},

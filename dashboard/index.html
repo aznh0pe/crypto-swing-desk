@@ -702,7 +702,7 @@ function viewScans() {
     <div class="small muted">Prices: Coinbase public data, refreshed about every 15 to 60 minutes by a GitHub Action. Daily bars close at 00:00 UTC.</div></section>
   <section class="section"><div class="section-head"><h2>Scan history</h2><span class="meta">Newest first</span></div>
     ${S.scans.length ? S.scans.slice(0, 30).map((sc) => `<details class="panel"><summary>${dtPT(sc.started_at)} · ${sc.mode === "close" ? "Daily-close scan" : "Position check"} · ${esc(sc.headline || "")}</summary>
-      <pre class="digest">${esc(sc.digest || "")}</pre><div class="small muted">Prices as of ${dtPT(sc.data?.prices_as_of)} · last daily bar ${esc(sc.data?.last_bar || "–")} · engine ${esc(sc.engine?.fingerprint || "–")} · strategy settings v${esc(sc.params_version ?? "–")}</div></details>`).join("") : `<div class="empty">No scans yet.</div>`}</section>`;
+      <pre class="digest">${esc(sc.digest || "")}</pre><div class="small muted">Prices as of ${dtPT(sc.data?.prices_as_of)} · last daily bar ${esc(sc.data?.last_bar || "–")} · engine ${esc(sc.engine?.fingerprint || "–")} · strategy settings rev ${esc(sc.params_version ?? "–")}</div></details>`).join("") : `<div class="empty">No scans yet.</div>`}</section>`;
 }
 
 // ---------------------------------------------------------------- strategy lab
@@ -715,7 +715,7 @@ function viewLab() {
   const cell = (sid, c) => { const x = T[sid]?.[c], on = strat[sid]?.enabled && (!(P.strategies?.[sid]?.market_conditions || []).length || P.strategies[sid].market_conditions.includes(c));
     if (!x || !on) return `<td class="c off ${c === cond ? "today" : ""}">${x && x.n ? `<span title="not traded here">${Math.round(100 * x.p)}%</span>` : "–"}</td>`;
     return `<td class="c ${x.grade === "A+" ? "ap" : x.grade === "A" ? "a" : ""} ${c === cond ? "today" : ""}">${Math.round(100 * x.p)}% <span class="small">${esc(x.grade)}</span><div class="small muted">${x.n} trades${x.live_n ? ` +${x.live_n} live` : ""}</div></td>`; };
-  let h = `<section class="section"><div class="section-head"><h2>How the desk decides</h2><span class="meta">Calibrated ${dtPT(P.calibrated_at)} on prices through ${esc(P.data_through)} · settings v${esc(P.version)}</span></div>
+  let h = `<section class="section"><div class="section-head"><h2>How the desk decides</h2><span class="meta">Calibrated ${dtPT(P.calibrated_at)} on prices through ${esc(P.data_through)} · settings rev ${esc(P.rev)}</span></div>
     <div class="panel"><dl class="kv">
       <dt>Data</dt><dd>${esc(B.data?.pairs)} Coinbase USD pairs since ${esc(B.data?.first_bar)}, ${esc(B.data?.liquid_today)} liquid enough to trade today. Coins that were delisted stay in the history.</dd>
       <dt>Honest testing</dt><dd>Each strategy's settings are chosen on prices before ${esc(B.split)} only, then judged once on everything after (unseen data).</dd>
