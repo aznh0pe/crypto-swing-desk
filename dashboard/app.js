@@ -427,7 +427,7 @@ function researchSection() {
   const tone = { candidate: "good", watch: "info", redundant: "neutral", rejected: "neutral" };
   return `<section class="section"><div class="section-head"><h2>Research log</h2><span class="meta">${R.length} idea${R.length === 1 ? "" : "s"} tested · new ones every day, including the desk's own designs</span></div>
     ${R.length ? `<div class="grid g-research">${R.map((r) => `<div class="panel idea"><div class="row"><h3>${esc(r.label || r.id)}</h3>${pill(tone[r.verdict] || "neutral", r.verdict)}${r.own_design ? `<span class="tag">Own design</span>` : ""}${S.params?.custom?.[r.id] ? `<span class="tag">Live</span>` : ""}</div>
-      <div class="small">${esc(r.spec?.about || "")}</div><div class="small muted">${esc(r.summary || "")}</div><div class="small muted">${esc(r.family || "")} · tested ${dPT(r.tested_at)}</div></div>`).join("")}</div>`
+      <div class="small">${esc(r.about || r.spec?.about || "")}</div><div class="small muted">${esc(r.summary || "")}</div><div class="small muted">${esc(r.family || "")} · tested ${dPT(r.tested_at)}</div></div>`).join("")}</div>`
       : `<div class="empty">The daily learning run tests its first ideas after the next daily close: a backlog of ten is queued, and at least one new own design is added every day.</div>`}</section>`;
 }
 function lessonsSection() {

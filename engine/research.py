@@ -39,7 +39,7 @@ def cmd_next(state_dir, out_dir) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     tested = {k: v for k, v in st["research"].items()}
     P = S.load_params(st["params"])
-    known = set(tested) | set(S.builtin_specs())
+    known = set(tested) | set(S.all_specs(P))
     todo = [s for s in seeds() if s["id"] not in known]
     seed = todo[0] if todo else None
     if seed:
@@ -51,12 +51,12 @@ def cmd_next(state_dir, out_dir) -> dict:
     thin = [c for c in I.CONDITIONS if not live_conds[c]]
     fam = {}
     for v in list(tested.values()) + list(S.builtin_specs().values()):
-        f = (v.get("spec") or v).get("family") or "Other"
+        f = v.get("family") or (v.get("spec") or {}).get("family") or "Other"
         fam[f] = fam.get(f, 0) + 1
     focus = ("No A+ strategy trades in: " + ", ".join(I.CONDITION_LABEL[c] for c in thin) + ". Design for those conditions first." if thin else
              "Every market condition has at least one A+ strategy. Raise the win rate: look for a filter or a new trigger that beats the weakest A+ cell.")
     res = {"next_seed": seed["id"] if seed else None, "spec_file": str((out / "seed_spec.json").resolve()) if seed else None,
-           "backlog_left": [s["id"] for s in todo[1:]], "tested": [{"id": k, "label": (v.get("spec") or {}).get("label"), "family": (v.get("spec") or {}).get("family"),
+           "backlog_left": [s["id"] for s in todo[1:]], "tested": [{"id": k, "label": v.get("label") or (v.get("spec") or {}).get("label"), "family": v.get("family") or (v.get("spec") or {}).get("family"),
                                                                      "verdict": v.get("verdict"), "summary": v.get("summary")} for k, v in sorted(tested.items())],
            "families_covered": fam, "a_plus_by_condition": live_conds, "focus": focus, "fields": sorted(rules.FRAME_NAMES), "market_fields": sorted(rules.MARKET_NAMES),
            "lessons": (st["learning"].get("lessons") or {}).get("items", [])}
@@ -84,9 +84,13 @@ def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
     st = load_state(state_dir)
     P = S.load_params(st["params"])
     sig = rules.signature(spec)
-    for k, v in {**{k: v.get("spec") for k, v in st["research"].items()}, **S.builtin_specs()}.items():
-        if v and k != spec.get("id") and rules.signature(v) == sig:
+    known = {**{k: (v.get("signature") or (rules.signature(v["spec"]) if v.get("spec") else None)) for k, v in st["research"].items()},
+             **{k: rules.signature(v) for k, v in S.all_specs(P).items()}}
+    for k, v in known.items():
+        if v and k != spec.get("id") and v == sig:
             errs.append(f"same rules as {k}: change the idea, not the name")
+    if spec.get("id") in st["research"]:
+        errs.append(f"{spec.get('id')} is already in the research log: give a variant its own id")
     if spec.get("id") in S.builtin_specs():
         errs.append("that id belongs to a built-in strategy")
     if errs:
@@ -116,7 +120,7 @@ def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
     f = lambda s: f"{100 * s['win_rate']:.0f}% of {s['trades']} (PF {s.get('profit_factor')}, avg {100 * s['avg_ret']:+.1f}%)" if s.get("trades") else "no trades"
     summary = f"Training {f(tr_n)}; unseen {f(te)}; overlap with live strategies {100 * ov:.0f}%. {r['reason']}"
     rid = spec["id"]
-    doc = {"id": rid, "spec": spec, "verdict": verdict, "summary": summary, "tested_at": C.now_iso(), "family": spec.get("family"),
+    doc = {"id": rid, "spec": spec, "signature": sig, "about": spec.get("about"), "verdict": verdict, "summary": summary, "tested_at": C.now_iso(), "family": spec.get("family"),
            "label": spec.get("label"), "params": r["params"], "market_conditions": r["market_conditions"], "mode": r["mode"],
            "source": spec.get("source"), "own_design": "own design" in str((spec.get("source") or {}).get("title", "")).lower()}
     result = {"id": f"{rid}-{C.now_iso()[:10]}", "idea": rid, "tested_at": C.now_iso(), "verdict": verdict, "overlap": round(ov, 3),
