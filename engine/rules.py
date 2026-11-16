@@ -45,10 +45,10 @@ FRAME_NAMES = {"open", "high", "low", "close", "volume", "sma5", "sma10", "sma20
                "max7c", "hh10", "hh20", "hh55", "hh90", "ll10", "ll20", "ll55", "streak", "upstreak", "slope200", "slope50",
                "dist200", "dist50", "dist20", "v20", "v5", "dv30", "vol_ratio", "ret1", "ret3", "ret7", "ret14", "ret30",
                "ret90", "adx14", "vwap20", "vstd20", "rs_pct", "rs30_pct", "dd90", "vol_rank", "is_major", "range",
-               "nr7", "inside", "body", "upper_wick", "lower_wick", "age"}
+               "nr7", "inside", "body", "upper_wick", "lower_wick", "age", "is_core"}
 MARKET_NAMES = {"btc", "btc_sma200", "btc_sma50", "btc_above200", "btc_above50", "btc_dist200", "btc_dist50", "btc_ret1",
                 "btc_ret7", "btc_ret30", "btc_rsi2", "btc_rsi14", "btc_vol_ratio", "btc_dd90", "breadth50", "breadth200",
-                "breadth20", "alt_ret7", "eth_btc_up", "fng", "stress", "bull"}
+                "breadth20", "alt_ret7", "eth_btc_up", "fng", "stress", "bull", "washed", "flush7", "up7"}
 CAL_NAMES = {"dow", "dom"}
 FUNCS = {"rmin": 2, "rmax": 2, "rmean": 2, "rsum": 2, "min": 2, "max": 2, "abs": 1}
 EXITS = {"sma5", "prev_high", "high7", "rsi2_70", "ema10_lost", "none"}
@@ -118,7 +118,7 @@ class Evaluator:
         ind = self.ind
         if name == "range":
             f = ind["high"] - ind["low"]
-        elif name == "is_major":
+        elif name in ("is_major", "is_core"):
             f = ind[name].astype(float)
         elif name in FRAME_NAMES and name in ind:
             f = ind[name]
@@ -305,6 +305,85 @@ def build_plan(spec: dict, ind: dict, P: dict, b: dict, params: dict | None = No
             "valid_days": _num(spec.get("valid_days", 1), pr, int), "max_hold": _num(spec.get("max_hold", 7), pr, int),
             "dyn_exit": dyn if dyn in EXITS else "none", "stop": stop, "target": target,
             "mask": m.fillna(False).astype(bool), "limit": limit}
+
+
+FIELD_WORDS = {
+    "alt_ret7": "alt coins' 7-day change", "btc_ret7": "Bitcoin's 7-day change", "btc_ret1": "Bitcoin's 1-day change", "btc_ret30": "Bitcoin's 30-day change",
+    "flush7": "share of coins down 15%+ in a week", "washed": "share of coins washed out", "up7": "share of coins up on the week",
+    "breadth20": "share of coins above their 20-day average", "breadth50": "share of coins above their 50-day average", "breadth200": "share of coins above their 200-day average",
+    "btc_dist200": "Bitcoin vs its 200-day average", "btc_dist50": "Bitcoin vs its 50-day average", "btc_dd90": "Bitcoin's drop from its 90-day high",
+    "btc_rsi2": "Bitcoin's RSI(2)", "btc_rsi14": "Bitcoin's RSI(14)", "btc_vol_ratio": "Bitcoin's volatility vs normal", "fng": "Fear & Greed",
+    "rsi2": "RSI(2)", "rsi3": "RSI(3)", "rsi14": "RSI(14)", "ret1": "1-day change", "ret3": "3-day change", "ret5": "5-day change", "ret7": "7-day change",
+    "ret14": "14-day change", "ret30": "30-day change", "ret90": "90-day change", "dd90": "drop from its 90-day high", "dist20": "distance from its 20-day average",
+    "dist50": "distance from its 50-day average", "dist200": "distance from its 200-day average", "ibs": "close within the day's range", "streak": "streak of up/down days",
+    "atr_pct": "daily range", "vol_ratio": "volume vs its 20-day average", "rs_pct": "90-day strength rank", "rs30_pct": "30-day strength rank", "adx14": "trend strength (ADX)",
+    "pctb": "position in its Bollinger band", "close": "close", "low": "low", "high": "high",
+}
+PCT_FIELDS = {k for k in FIELD_WORDS if k.startswith(("ret", "dist", "dd", "alt_ret", "btc_ret", "btc_dist", "btc_dd", "breadth")) or k in ("flush7", "washed", "up7", "atr_pct")}
+OP_WORDS = {ast.Lt: "below", ast.LtE: "at or below", ast.Gt: "above", ast.GtE: "at or above"}
+
+
+def _fmt_field(name: str, v: float) -> str:
+    if name in PCT_FIELDS:
+        return f"{100 * v:+.1f}%" if name.startswith(("ret", "dist", "alt_ret", "btc_ret", "btc_dist", "dd", "btc_dd")) else f"{100 * v:.0f}%"
+    return f"{v:.3g}"
+
+
+def plain_condition(txt: str) -> tuple[str, str | None]:
+    """('7-day change at or below -30.0%', 'ret7') for a simple one-field comparison; (the raw text, None) otherwise."""
+    try:
+        tree = ast.parse(txt, mode="eval").body
+        if isinstance(tree, ast.Compare) and len(tree.ops) == 1 and isinstance(tree.left, ast.Name) and tree.left.id in FIELD_WORDS:
+            rhs = ast.literal_eval(tree.comparators[0])
+            if isinstance(rhs, (int, float)) and type(tree.ops[0]) in OP_WORDS:
+                return f"{FIELD_WORDS[tree.left.id]} {OP_WORDS[type(tree.ops[0])]} {_fmt_field(tree.left.id, float(rhs))}", tree.left.id
+    except Exception:
+        pass
+    return txt, None
+
+
+def near_misses(spec: dict, ind: dict, b: dict, params: dict | None = None) -> dict:
+    """What the last bar is missing for this strategy, for the dashboard's radar:
+    "coins"  coins that pass every condition but one (with what is missing and where it stands now)
+    "market" the market-wide conditions that are not met (false for every coin)
+    "ready"  coins that already pass every coin-level condition and wait only on those market conditions"""
+    pr = {**(spec.get("params") or {}), **(params or {})}
+    ev = evaluator(ind)
+    base = b["liquid"].iloc[-1].copy()
+    uni = spec.get("universe", "all")
+    if uni == "majors":
+        base &= b["is_major"].iloc[-1]
+    elif uni == "alts":
+        base &= ~b["is_major"].iloc[-1]
+    names = base.index[base.values]
+    if not len(names):
+        return {"coins": [], "market": [], "ready": []}
+
+    def now_text(field, tk):
+        if not field:
+            return ""
+        try:
+            v = float(ev.frame(field).iloc[-1][tk])
+            return f"now {_fmt_field(field, v)}" if np.isfinite(v) else ""
+        except Exception:
+            return ""
+    market, per, fails = [], [], pd.Series(0, index=names)
+    for cond in spec["conditions"]:
+        txt = subst(cond, pr)
+        m = ev.mask(txt).iloc[-1].reindex(names).fillna(False).astype(bool)
+        words, field = plain_condition(txt)
+        if not m.any() and not (_names(ast.parse(txt, mode="eval"))[0] & FRAME_NAMES):
+            market.append({"needs": words, "now": now_text(field, names[0])})      # market-wide, false for every coin
+            continue
+        per.append((words, field, m))
+        fails = fails + (~m).astype(int)
+    if market:
+        return {"coins": [], "market": market, "ready": list(names[(fails == 0).values])}
+    rows = []
+    for tk in names[(fails == 1).values]:
+        words, field, _ = next(x for x in per if not x[2][tk])
+        rows.append({"ticker": tk, "needs": words, "now": now_text(field, tk)})
+    return {"coins": rows, "market": [], "ready": []}
 
 
 def strategy_entry(spec: dict, params: dict, enabled: bool) -> dict:

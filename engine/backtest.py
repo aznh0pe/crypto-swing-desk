@@ -17,10 +17,12 @@ import pandas as pd
 
 from .indicators import condition_series
 
-DEFAULT_COSTS = {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10}
+# Wider-list coins trade thinner books: a limit there only counts as filled when price trades 0.30% through it,
+# and market exits (stops, signal and time exits) slip 0.35% instead of 0.10%.
+DEFAULT_COSTS = {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10, "wide_slippage_pct": 0.35, "wide_fill_margin_pct": 0.30}
 FEATURES = ["rsi2", "rsi14", "atr_pct", "dist20", "dist50", "dist200", "dd90", "rs_pct", "rs30_pct", "vol_ratio", "ret7",
             "ret30", "adx14", "ibs", "streak", "is_major", "btc_dist200", "btc_dist50", "btc_ret7", "btc_ret30",
-            "btc_vol_ratio", "btc_rsi14", "breadth50", "breadth200", "alt_ret7", "fng"]
+            "btc_vol_ratio", "btc_rsi14", "breadth50", "breadth200", "alt_ret7", "fng", "dv30", "washed", "flush7", "up7"]
 
 
 def _a(x):
@@ -45,7 +47,10 @@ def simulate(plan: dict, ind: dict, costs: dict | None = None, last_signal_row: 
     O, H, L, C = (_a(ind[k]) for k in ("open", "high", "low", "close"))
     ATR, SMA5, RSI2, MAX7, EMA10 = (_a(ind[k]) for k in ("atr10", "sma5", "rsi2", "max7c", "ema10"))
     k = {**DEFAULT_COSTS, **(costs or {})}
-    maker, taker, slip = k["maker_pct"] / 100, k["taker_pct"] / 100, k["slippage_pct"] / 100
+    maker, taker, slip_core = k["maker_pct"] / 100, k["taker_pct"] / 100, k["slippage_pct"] / 100
+    slip_wide, margin_wide = k.get("wide_slippage_pct", 0.35) / 100, k.get("wide_fill_margin_pct", 0.30) / 100
+    CORE = _a(ind["is_core"]) if "is_core" in ind else np.ones(C.shape, dtype=bool)
+    last_bar = np.where(np.isfinite(C), np.arange(C.shape[0])[:, None], -1).max(axis=0)   # each coin's last priced day
     mg = manage or {}
     lock_atr = float(mg.get("lock_atr") or 0) or None
     lock_to = float(mg.get("lock_to", 0.5))
@@ -69,6 +74,8 @@ def simulate(plan: dict, ind: dict, costs: dict | None = None, last_signal_row: 
         limit = C[t, j] if market_entry else LIM[t, j]
         if not np.isfinite(limit) or limit <= 0:
             continue
+        core = bool(CORE[t, j])
+        slip, touch = (slip_core, limit) if core else (slip_wide, limit * (1 - margin_wide))
         fill_i, fill, fee_in = -1, np.nan, maker
         if market_entry:
             if t + 1 < T and np.isfinite(O[t + 1, j]):
@@ -76,12 +83,12 @@ def simulate(plan: dict, ind: dict, costs: dict | None = None, last_signal_row: 
         else:
             for d in range(t + 1, min(t + valid, T - 1) + 1):
                 lo = L[d, j]
-                if np.isfinite(lo) and lo < limit:
+                if np.isfinite(lo) and lo < touch:
                     fill_i, fill = d, min(O[d, j], limit)
                     break
         if fill_i < 0:
             if include_unfilled:
-                rows.append((t, j, -1, np.nan, -1, np.nan, "unfilled", 0, np.nan, np.nan, limit, np.nan))
+                rows.append((t, j, -1, np.nan, -1, np.nan, "unfilled", 0, np.nan, np.nan, limit, np.nan, core))
             continue
         if STOP_LV is not None:
             stop = STOP_LV[t, j]
@@ -138,15 +145,19 @@ def simulate(plan: dict, ind: dict, costs: dict | None = None, last_signal_row: 
                 break
             if lock_atr and cl - fill >= lock_atr * atr and stop < fill + lock_to * atr:
                 stop = fill + lock_to * atr
+        if exit_i < 0 and 0 <= last_bar[j] < T - 4 and last_bar[j] >= fill_i:
+            # the coin stopped trading (delisted) while the trade was open: out at its last price, never dropped
+            exit_i, exit_p, reason = int(last_bar[j]), C[last_bar[j], j] * (1 - slip), "delisted"
         net = (exit_p * (1 - fee_out)) / (fill * (1 + fee_in)) - 1 if exit_i >= 0 else np.nan
-        rows.append((t, j, fill_i, fill, exit_i, exit_p, reason, held, stop, tgt, limit, net))
+        rows.append((t, j, fill_i, fill, exit_i, exit_p, reason, held, stop, tgt, limit, net, core))
     if not rows:
         return pd.DataFrame()
     a = np.array(rows, dtype=object)
     df = pd.DataFrame({"t": a[:, 0].astype(int), "j": a[:, 1].astype(int), "fill_i": a[:, 2].astype(int),
                        "fill": a[:, 3].astype(float), "exit_i": a[:, 4].astype(int), "exit": a[:, 5].astype(float),
                        "reason": a[:, 6], "held": a[:, 7].astype(int), "stop": a[:, 8].astype(float),
-                       "target": a[:, 9].astype(float), "limit": a[:, 10].astype(float), "ret": a[:, 11].astype(float)})
+                       "target": a[:, 9].astype(float), "limit": a[:, 10].astype(float), "ret": a[:, 11].astype(float),
+                       "tier": np.where(a[:, 12].astype(bool), "core", "wide")})
     dates, tick = ind["close"].index, ind["close"].columns
     df["strategy"] = plan["name"]
     df["ticker"] = tick[df["j"].values]

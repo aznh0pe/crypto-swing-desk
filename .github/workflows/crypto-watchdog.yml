@@ -1,0 +1,53 @@
+name: crypto-watchdog
+
+# Safety net for the price feed: every few minutes, check that the data branch was refreshed recently and that
+# a crypto-data run is alive. If not, start one. Also keeps the repository's schedules from being paused.
+on:
+  schedule:
+    - cron: "4,19,34,49 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: crypto-watchdog
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restart the feed if it stopped
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          age=9999
+          if git fetch --depth 1 origin "data:refs/remotes/origin/data" 2>/dev/null; then
+            gen=$(git show refs/remotes/origin/data:meta.json | python3 -c "import json,sys; print(json.load(sys.stdin).get('generated_utc',''))" || true)
+            if [ -n "$gen" ]; then
+              age=$(python3 -c "import datetime as d,sys; print(int((d.datetime.now(d.timezone.utc)-d.datetime.fromisoformat(sys.argv[1])).total_seconds()/60))" "$gen")
+            fi
+          fi
+          alive=$(gh run list --repo "$REPO" --workflow crypto-data.yml --limit 20 --json status --jq '[.[] | select(.status=="in_progress" or .status=="queued" or .status=="pending" or .status=="waiting" or .status=="requested")] | length')
+          echo "feed age: ${age} min; crypto-data runs alive: ${alive}"
+          if [ "$age" -gt 35 ] && [ "$alive" -gt 0 ]; then
+            echo "::warning::the feed is ${age} minutes old although a run is alive (a full history rebuild takes a while; otherwise it is stuck)"
+          fi
+          if [ "$alive" -eq 0 ] || [ "$age" -gt 90 ]; then
+            gh workflow run crypto-data.yml --repo "$REPO" --ref main -f mode=auto && echo "::notice::restarted the feed loop"
+          fi
+      - name: Keep the schedule alive (GitHub pauses schedules after 60 days without commits)
+        run: |
+          last=$(git log -1 --format=%ct HEAD)
+          days=$(( ( $(date +%s) - last ) / 86400 ))
+          if [ "$days" -ge 40 ]; then
+            git config user.name "crypto-swing-desk-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -q --allow-empty -m "keepalive: keep the crypto schedules active"
+            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main || true
+          fi

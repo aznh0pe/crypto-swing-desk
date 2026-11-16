@@ -1,16 +1,13 @@
 name: crypto-data
 
-# Refreshes the `data` branch the Crypto Swing Desk scans read from (Coinbase public prices, no keys).
-# Crypto trades around the clock, so this runs all day, every day. GitHub starts scheduled runs late or
-# skips some at busy times; asking every 15 minutes gets a refresh through at least about once an hour.
+# The price feed the Crypto Swing Desk scans read (Coinbase public prices, no keys), published as the `data`
+# branch. Crypto trades around the clock, so one run loops for about 5.5 hours, refreshing every 10 minutes,
+# and then starts its successor. The crypto-watchdog workflow restarts the loop if it ever stops.
 on:
-  schedule:
-    - cron: "6,21,36,51 * * * *"
-    - cron: "43 9 * * 0"          # Sunday: rebuild the full history (picks up revisions and new listings) + keepalive
   workflow_dispatch:
     inputs:
       mode:
-        description: "auto | history"
+        description: "auto (loop) | once (single pass) | history (full rebuild, single pass)"
         default: "auto"
   push:
     branches: [main]
@@ -22,11 +19,12 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  fetch:
+  feed:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,29 +41,10 @@ jobs:
             git archive refs/remotes/origin/data | tar -x -C out
           fi
           ls -la out
-      - name: Keep the schedule alive (GitHub pauses schedules after 60 days without commits)
-        if: github.event.schedule == '43 9 * * 0'
-        run: |
-          last=$(git log -1 --format=%ct HEAD)
-          days=$(( ( $(date +%s) - last ) / 86400 ))
-          if [ "$days" -ge 40 ]; then
-            git config user.name "crypto-swing-desk-bot"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -q --allow-empty -m "keepalive: keep the crypto-data schedule active"
-            git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:main || true
-          fi
-      - name: Fetch
+      - name: Refresh loop
         env:
-          MODE: ${{ github.event.inputs.mode || (github.event.schedule == '43 9 * * 0' && 'history') || 'auto' }}
-          OUT_DIR: out
-        run: python pipeline/fetch_data.py
-      - name: Publish the data branch (one squashed commit, no history bloat)
-        run: |
-          cd out
-          rm -rf .git
-          git init -q -b data
-          git config user.name "crypto-swing-desk-bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -q -m "data $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push -q -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data:data
+          MODE: ${{ github.event.inputs.mode || 'auto' }}
+          PUSH_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: bash pipeline/refresh_loop.sh

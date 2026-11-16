@@ -4,7 +4,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-MIN_DV = 2_000_000     # median 30-day dollar volume for a coin to count as liquid on a given day
+CORE_DV = 2_000_000    # median 30-day dollar volume of the core list (the most liquid coins)
+MIN_DV = 150_000       # ... and of the wider list: every coin at or above this is scanned; below it nothing is
 MIN_AGE = 120          # days of history before a coin can signal
 N_MAJORS = 12
 CONDITIONS = ("bull_calm", "bull_stress", "bear_calm", "bear_stress")
@@ -83,6 +84,8 @@ def compute(w: dict, fng: pd.Series | None = None, min_dv: float = MIN_DV) -> di
     ind["lower_wick"] = ((np.minimum(o, c) - l) / rng).fillna(0.0)
     liquid = (ind["dv30"] >= min_dv) & (ind["age"] >= MIN_AGE) & (c > 0) & (v > 0)
     ind["liquid"] = liquid
+    core = liquid & (ind["dv30"] >= CORE_DV)
+    ind["is_core"] = core
     ind["vol_rank"] = ind["dv30"].where(liquid).rank(axis=1, ascending=False)
     ind["is_major"] = (ind["vol_rank"] <= N_MAJORS).fillna(False)
     ind["rs_pct"] = ind["ret90"].where(liquid).rank(axis=1, pct=True)
@@ -103,11 +106,17 @@ def compute(w: dict, fng: pd.Series | None = None, min_dv: float = MIN_DV) -> di
     r1 = b.pct_change()
     mk["btc_vol_ratio"] = r1.rolling(7, min_periods=7).std() / r1.rolling(60, min_periods=40).std().replace(0, np.nan)
     mk["btc_dd90"] = b / b.rolling(90, min_periods=30).max() - 1
-    nliq = liquid.sum(axis=1).replace(0, np.nan)
+    # breadth and the alt-market move are measured on the core list, so they mean the same thing however wide the scan is
+    nliq = core.sum(axis=1).replace(0, np.nan)
     for n in (20, 50, 200):
-        mk[f"breadth{n}"] = ((c > ind[f"sma{n}"]) & liquid).sum(axis=1) / nliq
+        mk[f"breadth{n}"] = ((c > ind[f"sma{n}"]) & core).sum(axis=1) / nliq
     alts = [t for t in c.columns if t != "BTC"]
-    mk["alt_ret7"] = ind["ret7"][alts].where(liquid[alts]).median(axis=1)
+    mk["alt_ret7"] = ind["ret7"][alts].where(core[alts]).median(axis=1)
+    # how much of the market is being flushed at once: a coin falling alone is usually its own bad news,
+    # a coin falling with everything else is forced selling
+    mk["washed"] = ((ind["rsi2"] < 15) & core).sum(axis=1) / nliq          # share of core coins with RSI(2) under 15
+    mk["flush7"] = ((ind["ret7"] <= -0.15) & core).sum(axis=1) / nliq      # share of core coins down 15%+ in a week
+    mk["up7"] = ((ind["ret7"] >= 0.10) & core).sum(axis=1) / nliq          # share of core coins up 10%+ in a week
     if "ETH" in c and "BTC" in c:
         eb = c["ETH"] / c["BTC"]
         mk["eth_btc_up"] = (eb > eb.rolling(50, min_periods=50).mean()).astype(float)
@@ -133,4 +142,4 @@ def condition_gate(ind: dict, conds, like: pd.DataFrame) -> pd.DataFrame:
 
 
 def base_masks(ind: dict) -> dict:
-    return {"liquid": ind["liquid"], "is_major": ind["is_major"]}
+    return {"liquid": ind["liquid"], "is_major": ind["is_major"], "is_core": ind["is_core"]}

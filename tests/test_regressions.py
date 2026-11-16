@@ -1,0 +1,125 @@
+"""Regression tests: one for every fault the 2026-11-16 audit found, so none of them can come back unnoticed.
+Run: python3 tests/test_regressions.py"""
+import json, pathlib, shutil, sys, tempfile
+import numpy as np, pandas as pd
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from tests.make_synth import make  # noqa: E402
+from engine import backtest as bt, data as D, indicators as I, learn as L, portfolio as PF, rules, scan as SC, strategies as S  # noqa: E402
+
+
+def entry(tk, score, grade="A+", price=10.0):
+    return {"ticker": tk, "product": f"{tk}-USD", "strategy": "DIP_UPTREND", "strategy_label": "Dip", "family": "x", "about": "x", "grade": grade, "score": score,
+            "win_pct": 75.0, "cell_n": 100, "cell_days": 30, "tier": "core", "min_size": "0.01", "cell_train": 0.7, "cell_oos": 0.7, "condition": "bull_calm",
+            "entry_kind": "limit_next", "entry": price, "stop": price * 0.9, "target": price * 5, "atr": 0.5, "last_close": price * 1.02, "stop_pct": -10.0,
+            "target_pct": 10.0, "net_win_pct": 8.9, "net_loss_pct": -11.3, "rr": 0.79, "hold_max_days": 5, "valid_days": 1, "dyn_exit": "none", "exit_signal": "",
+            "signal_date": "x", "rs_pct": 50, "rsi2": 5.0, "rsi14": 30.0, "vs_50d_pct": -5.0, "vs_200d_pct": 1.0, "atr_pct": 5.0, "dollar_vol_30d": 1e7, "is_major": False}
+
+
+def main():
+    w = pathlib.Path(tempfile.mkdtemp())
+    make(w / "data")
+    now = pd.Timestamp.now(tz="UTC").tz_localize(None)
+
+    # 1. timestamps in any form parse to naive UTC (the old one-liner crashed on some forms)
+    assert D.naive_ts("2026-11-16T00:00:00Z") == pd.Timestamp("2026-11-16") == D.naive_ts("2026-11-16 00:00:00+00:00") == D.naive_ts("2026-11-16")
+    assert D.naive_ts(None, "d") == "d" and D.naive_ts("garbage", "d") == "d"
+
+    # 2. order size is floored to the exchange's step and never costs more than the budget
+    assert PF._round_qty(1.23456789, "0.01") == 1.23 and PF._round_qty(0.999, "1") == 0.0 and PF._round_qty(177.979, "0.1") == 177.9
+    sz = PF.size_position(0.469, 0.307, 1500, 1500, 2.0, {"maker_fee_pct": 0.5, "taker_fee_pct": 0.9, "max_position_pct": 30}, 25, "0.01")
+    assert sz["qty"] * 0.469 <= 450.001 and abs(sz["qty"] * 100 - round(sz["qty"] * 100)) < 1e-6
+
+    # 3. on daily bars alone, the high of the fill day never counts as a target hit (it may have printed before the fill)
+    d0 = pd.Timestamp("2026-01-10")
+    idx = pd.date_range("2026-01-08", "2026-01-11", freq="D")
+    wd = {"low": pd.DataFrame({"X": [9, 9, 8.0, 9.5]}, index=idx), "high": pd.DataFrame({"X": [10, 10, 20.0, 11.0]}, index=idx)}
+    ex = SC.extremes_since("X", d0 + pd.Timedelta(hours=9), wd, None, None)
+    assert ex["high"] == 11.0 and ex["low"] == 8.0, ex
+    hr = pd.date_range("2026-01-09", periods=72, freq="h")                     # with hourly bars covering the fill, they decide
+    hd = {"low": pd.DataFrame({"X": np.r_[np.full(33, 9.0), np.full(39, 9.4)]}, index=hr), "high": pd.DataFrame({"X": np.r_[np.full(33, 20.0), np.full(39, 10.5)]}, index=hr)}
+    ex = SC.extremes_since("X", d0 + pd.Timedelta(hours=9), wd, None, hd)
+    assert ex["high"] == 10.5 and ex["low"] == 9.4, ex
+
+    # 4. a trade still open when its coin stops trading is closed at the last price, not silently dropped
+    P = S.load_params(None)
+    wdl, part, meta = D.load_daily(w / "data")
+    for f in wdl:                                                                # delist C05 forty days ago
+        wdl[f].loc[wdl[f].index[-40]:, "C05"] = np.nan
+    ind = I.compute(wdl, None, min_dv=P["universe"]["min_dv"])
+    b = I.base_masks(ind)
+    spec = {"id": "T_ALWAYS", "label": "t", "family": "t", "about": "t", "universe": "all", "conditions": ["close > 0"], "entry": {"kind": "open_next"},
+            "stop": {"atr": 50}, "target": {"atr": 50}, "exit": "none", "max_hold": 30, "valid_days": 1, "params": {}, "grid": {}}
+    assert not rules.validate(spec), rules.validate(spec)
+    tr = bt.simulate(rules.build_plan(spec, ind, P, b, {}, "T_ALWAYS"), ind, P["costs"])
+    x = tr[(tr["ticker"] == "C05") & tr["exit_date"].notna()] if "exit_date" in tr else tr[tr["ticker"] == "C05"]
+    assert (x["reason"] == "delisted").any(), x["reason"].value_counts().to_dict()
+
+    # 5. the engine lays the feed's small recent file over the history file
+    d2 = w / "data2"
+    shutil.copytree(w / "data", d2)
+    df = pd.read_csv(d2 / "daily.csv.gz", dtype={"ticker": str})
+    last = df["date"].max()
+    df[df["date"] < last].to_csv(d2 / "daily.csv.gz", index=False, compression="gzip")
+    rec = df[df["date"] >= sorted(df["date"].unique())[-5]].copy()
+    rec.loc[(rec["ticker"] == "BTC") & (rec["date"] == sorted(df["date"].unique())[-2]), "close"] = 12345.0
+    rec.to_csv(d2 / "recent.csv.gz", index=False, compression="gzip")
+    w2, part2, _ = D.load_daily(d2)
+    assert part2 is not None and str(part2["day"].date()) == last and float(w2["close"]["BTC"].iloc[-1]) == 12345.0
+
+    # 6. every A+ setup is served: nothing is cut at a daily cap, and what the account cannot hold is still a full ticket
+    st = w / "state"
+    (st / "strategy").mkdir(parents=True)
+    real_find = SC.find_entries
+    px = lambda ind, tk: 0.6 * float(ind["close"][tk].iloc[-1])                  # a bid far below the market: cannot have traded yet
+    SC.find_entries = lambda ind, P, uni, cond, paused: ([entry(f"C{i:02d}", 90 - i, price=px(ind, f"C{i:02d}")) for i in range(9)] + [entry("C15", 50, "A", px(ind, "C15"))], [])
+    out = SC.run("close", w / "data", st, w / "scan1", now.normalize() + pd.Timedelta(minutes=20))
+    js = json.loads((w / "scan1" / "scan.json").read_text())
+    ents = js["entries"]
+    assert len(ents) == 9 and js["scan"]["counts"]["aplus"] == 9, len(ents)
+    assert 1 <= sum(e["funded"] for e in ents) <= 8 and any(not e["funded"] for e in ents) and all(e["qty"] > 0 and e["order"] for e in ents)
+    assert len([x for x in json.loads((w / "scan1" / "writes.json").read_text()) if x["collection"] == "alerts"]) == 9
+    assert js["scan"]["pace"]["served"] == 9 and js["scan"]["universe"]["scanned"] > 0 and len(js["scan"]["watchlist"]) == 1
+
+    # 7. a check run catches up when no close scan ran for the bar, and does not repeat it once one has
+    out = SC.run("check", w / "data", st, w / "scan2")
+    s2 = json.loads((w / "scan2" / "scan.json").read_text())
+    assert s2["scan"]["catch_up"] and len(s2["entries"]) >= 1
+    (st / "scans").mkdir()
+    (st / "scans" / "a.json").write_text(json.dumps(s2["scan"]))
+    SC.run("check", w / "data", st, w / "scan3")
+    s3 = json.loads((w / "scan3" / "scan.json").read_text())
+    assert not s3["scan"]["catch_up"] and not s3["entries"]
+    SC.find_entries = real_find
+
+    # 8. stale prices: no setups from old bars, and the scan says so (so the next run catches up)
+    d3 = w / "data3"
+    shutil.copytree(w / "data", d3)
+    df = pd.read_csv(d3 / "daily.csv.gz", dtype={"ticker": str})
+    df[df["date"] < sorted(df["date"].unique())[-3]].to_csv(d3 / "daily.csv.gz", index=False, compression="gzip")
+    SC.run("close", d3, st, w / "scan4")
+    s4 = json.loads((w / "scan4" / "scan.json").read_text())["scan"]
+    assert s4["skipped_setups"] and s4["data"]["status"] == "stale" and "prices behind" in s4["headline"]
+
+    # 9. live results feed the right tier's table; an old two-part key still means the core list
+    P = S.load_params(None)
+    P["grade_table"] = {"DIP_UPTREND": {"bull_calm": {"p": 0.70, "n": 60, "grade": "A+"}}}
+    P["grade_table_wide"] = {"DIP_UPTREND": {"bull_calm": {"p": 0.70, "n": 60, "grade": "A+"}}}
+    L.apply_live(P, {"cells": {"DIP_UPTREND|bull_calm|wide": {"n": 10, "wins": 1}}})
+    assert P["grade_table"]["DIP_UPTREND"]["bull_calm"]["grade"] == "A+" and P["grade_table_wide"]["DIP_UPTREND"]["bull_calm"]["grade"] != "A+"
+    L.apply_live(P, {"cells": {"DIP_UPTREND|bull_calm": {"n": 10, "wins": 1}}})
+    assert P["grade_table"]["DIP_UPTREND"]["bull_calm"]["grade"] != "A+"
+
+    # 10. the daily journal is filed under the UTC trading day that just finished, and reports run health, pace and the coin list
+    r = L.review(w / "data", st, w / "learn")
+    assert r["journal"] == (now.normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d"), r["journal"]
+    j = json.loads((w / "learn" / "journal.json").read_text())
+    assert {"opportunities", "pace", "universe", "runs"} <= set(j) and j["universe"]["scanned"] > 0
+
+    # 11. the radar explains what is missing in plain words
+    assert rules.plain_condition("ret7 <= -0.3")[0] == "7-day change at or below -30.0%" and rules.plain_condition("rsi2 < 8")[0] == "RSI(2) below 8"
+    print("regression tests passed")
+
+
+if __name__ == "__main__":
+    main()

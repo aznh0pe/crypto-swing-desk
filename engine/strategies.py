@@ -14,11 +14,13 @@ SPLIT = "2023-01-01"     # training years end here; everything after is unseen d
 ENABLE_RULE = {"train_win": 0.58, "train_pf": 1.30, "train_avg": 0.004, "train_n": 40, "train_day_win": 0.55, "oos_n": 20, "oos_pf": 1.10, "oos_decay": 0.08}
 DEFAULT_PARAMS = {
     "rev": 0, "split": SPLIT,
-    "costs": {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10},
-    "risk": {"risk_pct": 2.0, "max_position_pct": 30.0, "max_open_positions": 4, "min_order_usd": 25.0, "max_per_day": 3},
+    "costs": {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10, "wide_slippage_pct": 0.35, "wide_fill_margin_pct": 0.30},
+    "risk": {"risk_pct": 2.0, "max_position_pct": 30.0, "max_open_positions": 8, "min_order_usd": 25.0},
     "manage": {"lock_atr": 2.0, "lock_to": 0.5},
-    "grading": {"aplus_win": 0.66, "aplus_min_n": 25, "aplus_min_days": 10, "watch_win": 0.58},
-    "strategies": {}, "custom": {},
+    "grading": {"aplus_win": 0.66, "aplus_min_n": 25, "aplus_min_days": 10, "watch_win": 0.58, "wide_min_n": 40, "wide_min_days": 15, "aplus_day_win": 0.58},
+    "universe": {"min_dv": 150_000},
+    "pace": {"min_week": 5},
+    "strategies": {}, "custom": {}, "retired": {},
 }
 
 
@@ -30,13 +32,15 @@ def all_specs(P: dict | None = None) -> dict:
     out = builtin_specs()
     for k, v in ((P or {}).get("custom") or {}).items():
         out[k] = v["spec"] if "spec" in v else v
+    for k in ((P or {}).get("retired") or {}):
+        out.pop(k, None)
     return out
 
 
 def params_with_defaults(p: dict | None) -> dict:
     P = json.loads(json.dumps(DEFAULT_PARAMS))
     for k, v in (p or {}).items():
-        if isinstance(v, dict) and isinstance(P.get(k), dict) and k not in ("strategies", "custom"):
+        if isinstance(v, dict) and isinstance(P.get(k), dict) and k not in ("strategies", "custom", "retired"):
             P[k].update(v)
         else:
             P[k] = v

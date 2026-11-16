@@ -1,11 +1,14 @@
 """Crypto price feed for the Crypto Swing Desk.
 
 Pulls public market data from the Coinbase Exchange API (no key needed) and writes the files the
-engine reads. Runs in a GitHub Action; the result is published as the `data` branch.
+engine reads. Runs in a GitHub Action around the clock; the result is published as the `data` branch.
 
-  daily.csv.gz   date,ticker,open,high,low,close,volume   every USD pair, full history (UTC daily bars)
-  hourly.csv.gz  time,ticker,open,high,low,close,volume   last ~300 hours, liquid pairs only
-  universe.json  one item per pair: status, liquidity, first bar, whether the desk may trade it
+  daily.csv.gz   date,ticker,open,high,low,close,volume   every USD pair, full history (UTC daily bars). Rewritten
+                                                          only when a day finishes, a coin lists or history is rebuilt.
+  recent.csv.gz  same columns                             the last days of every pair incl. the bar still forming;
+                                                          rewritten every pass. The engine lays it over daily.csv.gz.
+  hourly.csv.gz  time,ticker,open,high,low,close,volume   last ~200 hours for every coin the desk may scan
+  universe.json  one item per pair: status, liquidity, tier, first bar, order increments
   fng.json       Crypto Fear & Greed index history (optional extra; the engine works without it)
   meta.json      when the feed ran, the last finished daily bar, counts and problems
 
@@ -35,8 +38,12 @@ STABLE = {"USDT", "USDC", "DAI", "PYUSD", "GUSD", "USDS", "EURC", "PAX", "BUSD",
           "GYEN", "EURT", "USD1", "USDE", "RLUSD", "USDG", "FRAX", "LUSD", "SUSD", "MUSD", "CUSD", "UXD"}
 WRAPPED = {"WBTC", "CBBTC", "CBETH", "LSETH", "MSOL", "WAXL", "WCFG", "WLUNA", "WAMPL", "RETH", "STETH", "WSTETH",
            "JITOSOL", "BSOL", "LBTC", "CBXRP", "CBDOGE", "CBADA", "CBLTC", "PAXG"}
-MIN_DOLLAR_VOL = 2_000_000      # median daily dollar volume over 30 days for a pair to be tradable by the desk
+CORE_DOLLAR_VOL = 2_000_000     # median daily dollar volume over 30 days: the core tier
+MIN_DOLLAR_VOL = 100_000        # floor for the feed to carry hourly bars (the engine applies its own, stricter floor)
 MIN_HISTORY_DAYS = 120
+RECENT_DAYS = 12
+HISTORY_EVERY_DAYS = 7          # full rebuild (revisions, relistings) once a week, in a quiet hour
+HOURS = 200
 _last = [0.0]
 
 
@@ -117,91 +124,138 @@ def write_gz(df: pd.DataFrame, name: str):
     (OUT / name).write_bytes(buf.getvalue())
 
 
+def restricted(p: dict) -> str | None:
+    """Why a listed pair cannot be traded normally right now (None = it can)."""
+    if p.get("status") != "online":
+        return p.get("status") or "gone"
+    for flag in ("trading_disabled", "cancel_only", "post_only", "limit_only", "auction_mode"):
+        if p.get(flag):
+            return flag
+    return None
+
+
 def main(mode: str = "auto"):
     OUT.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now(dt.timezone.utc)
+    today = now.strftime("%Y-%m-%d")
     problems: list[str] = []
     prods = get("/products") or []
     usd = [p for p in prods if p.get("quote_currency") == "USD" and p.get("base_currency") not in STABLE
            and p.get("base_currency") not in WRAPPED]
     if len(usd) < 20:
         raise RuntimeError(f"Coinbase returned only {len(usd)} USD pairs; not publishing")
+    try:
+        old_meta = json.loads((OUT / "meta.json").read_text())
+    except Exception:
+        old_meta = {}
     old = read_gz("daily.csv.gz", "date")
     have = set(old["ticker"].unique())
-    full = mode == "history" or old.empty
-    parts, n_err = [], 0
+    built = old_meta.get("history_built")
+    age = (now - dt.datetime.fromisoformat(built)).days if built else 999
+    full = mode == "history" or old.empty or (mode == "auto" and age >= HISTORY_EVERY_DAYS and 3 <= now.hour < 11)
+    # how far back the quick top-up must reach to join up with what is already stored
+    old_max = old["date"].max() if len(old) else None
+    gap = (now.date() - dt.date.fromisoformat(old_max)).days if old_max else 0
+    reach = min(299, max(RECENT_DAYS, gap + 3))
+    parts, n_err, new_coins = [], 0, []
     for k, p in enumerate(sorted(usd, key=lambda x: x["id"])):
         tk, pid = p["base_currency"], p["id"]
         try:
             if full or tk not in have:
                 rows = backfill(pid, 86400, START, now)
-            else:  # top up the last 300 days (covers any gap since the last run and late revisions)
-                rows = candles(pid, 86400, now - dt.timedelta(days=299), now)
+                if not full and rows:
+                    new_coins.append(tk)
+            elif p.get("status") != "online":
+                continue                                   # delisted: nothing new to fetch
+            else:
+                rows = candles(pid, 86400, now - dt.timedelta(days=reach), now)
             parts.append(frame(rows, tk, "date"))
         except Exception as e:
             n_err += 1
             if n_err <= 8:
                 problems.append(f"{pid} daily: {e}"[:160])
-        if k % 50 == 0:
+        if k % 100 == 0:
             print(f"daily {k}/{len(usd)}", flush=True)
-    new = pd.concat(parts, ignore_index=True) if parts else old.iloc[0:0]
-    daily = pd.concat([old, new], ignore_index=True) if not full else pd.concat([old[~old["ticker"].isin(set(new["ticker"]))], new], ignore_index=True)
-    daily = daily.drop_duplicates(["date", "ticker"], keep="last").sort_values(["ticker", "date"])
-    daily = daily[(daily["close"] > 0) & (daily["high"] >= daily["low"])]
     if n_err > 0.3 * len(usd):
         raise RuntimeError(f"{n_err} of {len(usd)} pairs failed; not publishing")
+    new = pd.concat([f for f in parts if len(f)], ignore_index=True) if any(len(f) for f in parts) else old.iloc[0:0]
+    if full:   # keep stored history only for pairs the rebuild could not reach (delisted long ago)
+        daily = pd.concat([old[~old["ticker"].isin(set(new["ticker"]))], new], ignore_index=True)
+    else:
+        daily = pd.concat([old, new], ignore_index=True)
+    daily = daily.drop_duplicates(["date", "ticker"], keep="last").sort_values(["ticker", "date"])
+    daily = daily[(daily["close"] > 0) & (daily["high"] >= daily["low"])]
 
-    # universe: what the desk may trade today, and what it may use in backtests
-    today = now.strftime("%Y-%m-%d")
+    # universe: what trades on Coinbase today, how liquid it is, and the order increments
     done = daily[daily["date"] < today]
     items, active = [], []
-    by = {tk: g for tk, g in done.groupby("ticker")}
     info = {p["base_currency"]: p for p in usd}
-    for tk, g in by.items():
+    fresh_cut = (now - dt.timedelta(days=3)).strftime("%Y-%m-%d")
+    for tk, g in done.groupby("ticker"):
         p = info.get(tk, {})
         tail = g.tail(30)
         dv = float((tail["close"] * tail["volume"]).median()) if len(tail) else 0.0
         c = g["close"].tail(200)
         peg = len(c) >= 60 and float(((c > 0.97) & (c < 1.03)).mean()) > 0.95   # behaves like a stablecoin
-        fresh = g["date"].iloc[-1] >= (now - dt.timedelta(days=3)).strftime("%Y-%m-%d")
-        online = p.get("status") == "online" and not p.get("trading_disabled") and not p.get("limit_only") and fresh
-        ok = bool(online and not peg and dv >= MIN_DOLLAR_VOL and len(g) >= MIN_HISTORY_DAYS)
-        items.append({"ticker": tk, "product": p.get("id") or f"{tk}-USD", "status": p.get("status") or "gone",
-                      "first": g["date"].iloc[0], "last": g["date"].iloc[-1], "days": int(len(g)),
+        why = restricted(p) if p else "gone"
+        if why is None and g["date"].iloc[-1] < fresh_cut:
+            why = "no recent trades"
+        ok = bool(why is None and not peg and dv >= MIN_DOLLAR_VOL and len(g) >= MIN_HISTORY_DAYS)
+        items.append({"ticker": tk, "product": p.get("id") or f"{tk}-USD", "status": "online" if why is None else ("delisted" if why in ("delisted", "gone") else "restricted"),
+                      "restriction": why, "first": g["date"].iloc[0], "last": g["date"].iloc[-1], "days": int(len(g)),
                       "dollar_vol_30d": round(dv), "peg": bool(peg), "tradable": ok,
+                      "tier": None if not ok else ("core" if dv >= CORE_DOLLAR_VOL else "wide"),
                       "tick": p.get("quote_increment"), "min_size": p.get("base_increment")})
         if ok:
             active.append(tk)
     items.sort(key=lambda x: -x["dollar_vol_30d"])
-    daily = daily[~daily["ticker"].isin({i["ticker"] for i in items if i["peg"]})]
-    write_gz(daily, "daily.csv.gz")
-    (OUT / "universe.json").write_text(json.dumps({"built": now.isoformat(), "min_dollar_vol": MIN_DOLLAR_VOL,
-                                                   "tradable": len(active), "items": items}, indent=0))
+    pegged = {i["ticker"] for i in items if i["peg"]}
+    daily = daily[~daily["ticker"].isin(pegged)]
+    # the big history file changes only when a day has finished, a coin was added or history was rebuilt
+    # (it holds finished days only; the forming bar lives in recent.csv.gz)
+    stored_done = old["date"].max() if len(old) else None
+    last_done = done["date"].max() if len(done) else None
+    rewrite = full or bool(new_coins) or stored_done != last_done or not (OUT / "daily.csv.gz").exists()
+    if rewrite:
+        write_gz(daily[daily["date"] < today], "daily.csv.gz")
+    cut = (now - dt.timedelta(days=RECENT_DAYS + 1)).strftime("%Y-%m-%d")
+    write_gz(daily[daily["date"] >= cut], "recent.csv.gz")
+    (OUT / "universe.json").write_text(json.dumps({"built": now.isoformat(), "min_dollar_vol": MIN_DOLLAR_VOL, "core_dollar_vol": CORE_DOLLAR_VOL,
+                                                   "tradable": len(active), "core": len([i for i in items if i["tier"] == "core"]),
+                                                   "items": items}, indent=0))
 
-    # hourly bars for the tradable pairs: live marks, fill checks and the forming daily bar
-    hp = []
+    # hourly bars for every coin the desk may scan: live marks, fill checks and position checks
+    hp, h_err = [], 0
     for tk in active:
         try:
-            hp.append(frame(candles(info[tk]["id"], 3600, now - dt.timedelta(hours=299), now), tk, "time"))
+            hp.append(frame(candles(info[tk]["id"], 3600, now - dt.timedelta(hours=HOURS), now), tk, "time"))
         except Exception as e:
-            problems.append(f"{tk} hourly: {e}"[:160])
-    if hp:
+            h_err += 1
+            if h_err <= 5:
+                problems.append(f"{tk} hourly: {e}"[:160])
+    hp = [f for f in hp if len(f)]
+    if hp and h_err <= 0.3 * len(active):
         write_gz(pd.concat(hp, ignore_index=True).sort_values(["ticker", "time"]), "hourly.csv.gz")
+    elif active:
+        problems.append("hourly bars not refreshed this pass")
 
-    try:  # optional sentiment series
-        fng = get("https://api.alternative.me/fng/?limit=0&format=json", tries=2)
-        rows = [{"date": dt.datetime.fromtimestamp(int(d["timestamp"]), dt.timezone.utc).strftime("%Y-%m-%d"),
-                 "value": int(d["value"])} for d in (fng or {}).get("data", [])]
-        if len(rows) > 100:
-            (OUT / "fng.json").write_text(json.dumps(sorted(rows, key=lambda r: r["date"])))
-    except Exception as e:
-        problems.append(f"fear & greed: {e}"[:120])
+    fng_file = OUT / "fng.json"
+    if not fng_file.exists() or full or now.minute < 12:      # the index changes once a day: ask about hourly
+        try:
+            fng = get("https://api.alternative.me/fng/?limit=0&format=json", tries=2)
+            rows = [{"date": dt.datetime.fromtimestamp(int(d["timestamp"]), dt.timezone.utc).strftime("%Y-%m-%d"),
+                     "value": int(d["value"])} for d in (fng or {}).get("data", [])]
+            if len(rows) > 100:
+                fng_file.write_text(json.dumps(sorted(rows, key=lambda r: r["date"])))
+        except Exception as e:
+            problems.append(f"fear & greed: {e}"[:120])
 
-    last_done = done["date"].max() if len(done) else None
-    meta = {"generated_utc": now.isoformat(), "source": "Coinbase Exchange public API", "mode": "history" if full else "daily",
-            "last_daily_bar": last_done, "partial_day": today, "pairs": int(daily["ticker"].nunique()),
-            "tradable": len(active), "rows": int(len(daily)), "first_bar": daily["date"].min(),
-            "hourly_last": (max(f["time"].max() for f in hp if len(f)) if hp else None), "problems": problems}
+    meta = {"generated_utc": now.isoformat(), "finished_utc": dt.datetime.now(dt.timezone.utc).isoformat(), "source": "Coinbase Exchange public API",
+            "mode": "history" if full else "quick", "history_built": now.isoformat() if full else built,
+            "last_daily_bar": last_done, "partial_day": today, "pairs": int(daily["ticker"].nunique()), "listed": len([i for i in items if i["status"] == "online"]),
+            "tradable": len(active), "core": len([i for i in items if i["tier"] == "core"]), "new_coins": new_coins,
+            "rows": int(len(daily)), "first_bar": daily["date"].min(), "daily_rewritten": bool(rewrite),
+            "hourly_last": (max(f["time"].max() for f in hp) if hp else old_meta.get("hourly_last")), "problems": problems}
     (OUT / "meta.json").write_text(json.dumps(meta, indent=1))
     print(json.dumps(meta, indent=1))
 

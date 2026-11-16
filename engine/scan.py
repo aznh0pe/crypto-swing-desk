@@ -23,6 +23,8 @@ import pandas as pd
 
 from . import data as D
 from . import indicators as I
+from . import rules
+from .calibrate import CONFLUENCE_BONUS
 from . import strategies as S
 from . import version
 from .calibrate import clean
@@ -72,32 +74,46 @@ def live_prices(w, part, hourly) -> tuple[dict, str | None]:
     return px, asof
 
 
+_naive = D.naive_ts
+
+
 def extremes_since(tk: str, since: pd.Timestamp, w, part, hourly) -> dict:
-    """Lowest low and highest high since `since` (UTC), from hourly bars where they reach back far enough."""
-    lo = hi = None
-    lo_at = None
-    if hourly is not None and tk in hourly["low"] and hourly["low"].index[0] <= since:
-        seg_l, seg_h = hourly["low"][tk][hourly["low"].index >= since.floor("h")].dropna(), hourly["high"][tk][hourly["high"].index >= since.floor("h")].dropna()
+    """Lowest low and highest high since `since` (UTC).
+
+    Hourly bars are used when they reach back to `since`. Otherwise daily bars fill in, and the high of the day
+    that contains `since` is left out: on daily bars alone nobody can tell whether that high printed before or
+    after the fill, and the backtest does not count a target on the fill day either."""
+    lows, highs, lo_at = [], [], None
+    h_ok = hourly is not None and tk in hourly["low"] and len(hourly["low"])
+    covered = bool(h_ok) and hourly["low"].index[0] <= since
+    if h_ok:
+        sel = hourly["low"].index >= since.floor("h")
+        seg_l, seg_h = hourly["low"][tk][sel].dropna(), hourly["high"][tk][sel].dropna()
         if len(seg_l):
-            lo, hi, lo_at = float(seg_l.min()), float(seg_h.max()), iso(seg_l.idxmin())
-    else:
+            lows.append(float(seg_l.min())); highs.append(float(seg_h.max())); lo_at = iso(seg_l.idxmin())
+    if not covered:
         d0 = since.normalize()
-        seg_l, seg_h = w["low"][tk][w["low"].index >= d0].dropna() if tk in w["low"] else pd.Series(dtype=float), w["high"][tk][w["high"].index >= d0].dropna() if tk in w["high"] else pd.Series(dtype=float)
-        vals_l, vals_h = list(seg_l.values), list(seg_h.values)
+        h_low = lows[0] if lows else None
+        if tk in w["low"]:
+            seg_l, seg_h = w["low"][tk][w["low"].index >= d0].dropna(), w["high"][tk][w["high"].index > d0].dropna()
+            lows += list(seg_l.values); highs += list(seg_h.values)
         if part is not None and tk in part["low"]:
-            vals_l.append(float(part["low"][tk]))
-            vals_h.append(float(part["high"][tk]))
-        if vals_l:
-            lo, hi = float(min(vals_l)), float(max(vals_h))
-    return {"low": lo, "high": hi, "low_at": lo_at}
+            lows.append(float(part["low"][tk]))
+            if part.get("day") is None or part["day"] > d0:
+                highs.append(float(part["high"][tk]))
+        if h_low is None or min(lows) < h_low:
+            lo_at = None                      # the low came from a daily bar: its hour is unknown
+    return {"low": float(min(lows)) if lows else None, "high": float(max(highs)) if highs else None, "low_at": lo_at}
 
 
-def market_now(ind) -> dict:
+def market_now(ind, px: dict | None = None) -> dict:
     mk = ind["market"].iloc[-1]
     cond = I.condition_series(ind["market"]).iloc[-1]
     f = lambda k, n=4: None if not np.isfinite(mk.get(k, np.nan)) else round(float(mk[k]), n)
     return {"condition": cond, "label": I.CONDITION_LABEL.get(cond, "Unknown"), "bull": bool(mk["bull"] >= 0.5), "stress": bool(mk["stress"] >= 0.5),
-            "btc": f("btc", 2), "btc_vs_200d_pct": None if f("btc_dist200") is None else round(100 * f("btc_dist200"), 1),
+            "btc": f("btc", 2), "btc_now": None if not (px or {}).get("BTC") else round(float(px["BTC"]), 2),
+            "washed_pct": None if f("washed") is None else round(100 * f("washed")), "flush7_pct": None if f("flush7") is None else round(100 * f("flush7")),
+            "btc_vs_200d_pct": None if f("btc_dist200") is None else round(100 * f("btc_dist200"), 1),
             "btc_vs_50d_pct": None if f("btc_dist50") is None else round(100 * f("btc_dist50"), 1),
             "btc_7d_pct": None if f("btc_ret7") is None else round(100 * f("btc_ret7"), 1),
             "btc_30d_pct": None if f("btc_ret30") is None else round(100 * f("btc_ret30"), 1),
@@ -110,9 +126,9 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
     """(setups for the next day from the last finished bar, notes). One per coin: its best-scoring strategy."""
     c, atr10 = ind["close"], ind["atr10"]
     day = c.index[-1]
-    specs, table, costs, G = S.all_specs(P), P.get("grade_table") or {}, P["costs"], P["grading"]
+    specs, table, table_w, costs, G = S.all_specs(P), P.get("grade_table") or {}, P.get("grade_table_wide") or {}, P["costs"], P["grading"]
     maker, taker = costs["maker_pct"] / 100, costs["taker_pct"] / 100
-    best, notes = {}, []
+    best, notes, agree = {}, [], {}
     for sid, plan in S.all_plans(ind, P).items():
         if sid in paused:
             notes.append(f"{specs[sid]['label']} is paused by the daily review: {paused[sid]}")
@@ -120,8 +136,9 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
         row = plan["mask"].iloc[-1]
         for tk in row.index[row.values]:
             u = uni.get(tk) or {}
-            if uni and not u.get("tradable"):
-                continue
+            if uni and (not u or u.get("status") != "online" or u.get("peg")):
+                continue        # only coins that trade on Coinbase right now
+            tier = "core" if bool(ind["is_core"][tk].iloc[-1]) else "wide"
             atr, last = float(atr10[tk].iloc[-1]), float(c[tk].iloc[-1])
             market = plan["entry_kind"] == "open_next"
             entry = last if market else float(plan["limit"][tk].iloc[-1])
@@ -140,7 +157,7 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
             else:
                 tg = entry + ts["mult"] * atr
             stop, tg = _tick(stop, u.get("tick")), _tick(tg, u.get("tick"))
-            cell = (table.get(sid) or {}).get(cond) or {}
+            cell = ((table_w if tier == "wide" else table).get(sid) or {}).get(cond) or {}
             p, grade = cell.get("p"), cell.get("grade", "B")
             if p is None:
                 continue
@@ -152,7 +169,8 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
             score = round(100 * p + 2.0 * min(4.0, (tg - entry) / max(entry - stop, 1e-12)) + 3.0 * rs, 1)
             sp = specs[sid]
             e = {"ticker": tk, "product": u.get("product") or f"{tk}-USD", "strategy": sid, "strategy_label": sp["label"], "family": sp.get("family"),
-                 "about": sp.get("about"), "grade": grade, "score": score, "win_pct": round(100 * p, 1), "cell_n": cell.get("n"),
+                 "about": sp.get("about"), "grade": grade, "score": score, "win_pct": round(100 * p, 1), "cell_n": cell.get("n"), "cell_days": cell.get("days"),
+                 "tier": tier, "min_size": u.get("min_size"),
                  "cell_train": cell.get("train"), "cell_oos": cell.get("oos"), "condition": cond, "entry_kind": plan["entry_kind"],
                  "entry": entry, "stop": stop, "target": tg, "atr": round(atr, 10), "last_close": last,
                  "stop_pct": round(100 * (stop / entry - 1), 2), "target_pct": round(100 * (tg / entry - 1), 2),
@@ -163,10 +181,53 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
                  "vs_50d_pct": round(100 * float(ind["dist50"][tk].iloc[-1]), 1), "vs_200d_pct": round(100 * float(ind["dist200"][tk].iloc[-1]), 1) if np.isfinite(ind["dist200"][tk].iloc[-1]) else None,
                  "atr_pct": round(100 * float(ind["atr_pct"][tk].iloc[-1]), 1), "dollar_vol_30d": round(float(ind["dv30"][tk].iloc[-1])),
                  "is_major": bool(ind["is_major"][tk].iloc[-1])}
+            if grade == "A+":
+                agree.setdefault(tk, []).append(sp["label"])
             if tk not in best or (e["grade"] == "A+", e["score"]) > (best[tk]["grade"] == "A+", best[tk]["score"]):
                 best[tk] = e
+    for tk, e in best.items():        # agreement between A+ strategies is the strongest ranking signal measured: it lifts the score
+        k = len(agree.get(tk, []))
+        e["confluence"] = max(1, k)
+        e["also_by"] = [x for x in agree.get(tk, []) if x != e["strategy_label"]]
+        if e["grade"] == "A+" and k > 1:
+            e["score"] = round(e["score"] + CONFLUENCE_BONUS * (min(k, 3) - 1), 1)
     out = sorted(best.values(), key=lambda e: (e["grade"] != "A+", -e["score"]))
     return out, notes
+
+
+def radar(ind, P, uni, cond, paused: dict, limit: int = 14) -> dict:
+    """What is close: for every strategy with an A+ record in today's market condition, the coins one condition
+    short of a signal, or the single market-wide condition it is waiting for."""
+    specs, table, table_w, b = S.all_specs(P), P.get("grade_table") or {}, P.get("grade_table_wide") or {}, I.base_masks(ind)
+    coins, waiting = [], []
+    for sid, spec in specs.items():
+        rec = (P.get("strategies") or {}).get(sid) or {}
+        if not rec.get("enabled") or sid in paused or (rec.get("market_conditions") and cond not in rec["market_conditions"]):
+            continue
+        gc, gw = ((table.get(sid) or {}).get(cond) or {}), ((table_w.get(sid) or {}).get(cond) or {})
+        if "A+" not in (gc.get("grade"), gw.get("grade")):
+            continue
+        try:
+            nm = rules.near_misses(spec, ind, b, rec.get("params"))
+        except Exception:
+            continue
+        if nm["market"]:
+            ready = [tk for tk in nm["ready"] if not uni or ((uni.get(tk) or {}).get("status") == "online" and not (uni.get(tk) or {}).get("peg"))]
+            waiting.append({"strategy": sid, "strategy_label": spec["label"], "needs": "; ".join(m["needs"] for m in nm["market"]), "now": "; ".join(m["now"] for m in nm["market"] if m["now"]),
+                            "conditions_missing": len(nm["market"]), "coins_ready": len(ready), "examples": ready[:8]})
+            continue
+        for r in nm["coins"]:
+            u = uni.get(r["ticker"]) or {}
+            if uni and (not u or u.get("status") != "online" or u.get("peg")):
+                continue
+            tier = "core" if bool(ind["is_core"][r["ticker"]].iloc[-1]) else "wide"
+            g = (gw if tier == "wide" else gc)
+            if g.get("grade") != "A+":
+                continue
+            coins.append({"ticker": r["ticker"], "strategy": sid, "strategy_label": spec["label"], "needs": r["needs"], "now": r["now"], "tier": tier, "win_pct": round(100 * g["p"], 1)})
+    coins.sort(key=lambda r: -r["win_pct"])
+    waiting.sort(key=lambda x: (x["conditions_missing"], -x["coins_ready"]))
+    return {"coins": coins[:limit], "more": max(0, len(coins) - limit), "waiting": waiting}
 
 
 def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str, now: pd.Timestamp) -> dict:
@@ -175,7 +236,7 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
     entry, qty = float(tr.get("entry_price") or 0), float(tr.get("qty") or 0)
     stop, tgt = float(tr.get("stop") or 0), float(tr.get("target") or 0)
     hold = int(tr.get("hold_max_days") or 7)
-    at = pd.Timestamp(tr.get("entry_at") or tr.get("entry_date") or now).tz_localize(None) if pd.Timestamp(tr.get("entry_at") or tr.get("entry_date") or now).tzinfo is None else pd.Timestamp(tr.get("entry_at")).tz_convert(None)
+    at = _naive(tr.get("entry_at") or tr.get("entry_date"), now)
     last = px.get(tk)
     fill_day = at.normalize()
     last_hold_close = fill_day + pd.Timedelta(days=hold)          # 00:00 UTC that ends the last hold day
@@ -225,10 +286,10 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
 def check_order(a: dict, w, part, hourly, px: dict, now: pd.Timestamp) -> dict | None:
     """Did a resting entry order trade? Same rule as the backtest: the low must trade below the limit."""
     try:
-        vf, vu = pd.Timestamp(a["valid_from"]).tz_convert(None), pd.Timestamp(a["valid_until"]).tz_convert(None)
+        vf, vu = _naive(a["valid_from"]), _naive(a["valid_until"])
     except Exception:
         return None
-    if now < vf:
+    if vf is None or vu is None or now < vf:
         return None
     tk, lim = a.get("ticker"), float(a.get("entry") or 0)
     ex = extremes_since(tk, vf, w, part, hourly)
@@ -255,18 +316,18 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     now = pd.Timestamp(now).tz_localize(None) if now is not None else pd.Timestamp.now(tz="UTC").tz_localize(None)
     w, part, meta = D.load_daily(data_dir)
     hourly, uni = D.load_hourly(data_dir), D.load_universe(data_dir)
-    ind = I.compute(w, D.load_fng(data_dir))
     health = D.health(w, meta, now)
     state = load_state(state_dir)
     settings = state["settings"]
     P = S.load_params(state["params"])
+    ind = I.compute(w, D.load_fng(data_dir), min_dv=float((P.get("universe") or {}).get("min_dv") or I.MIN_DV))
     P["costs"]["maker_pct"], P["costs"]["taker_pct"] = float(settings.get("maker_fee_pct", P["costs"]["maker_pct"])), float(settings.get("taker_fee_pct", P["costs"]["taker_pct"]))
     P = apply_live(P, state["learning"].get("adjust"))
     paused = dict((state["learning"].get("adjust") or {}).get("paused") or {})
     fund = funds(state)
     gov = risk_governor(state, fund["capital"])
-    mkt = market_now(ind)
     px, asof = live_prices(w, part, hourly)
+    mkt = market_now(ind, px)
     writes, notes, errors = [], list(health["notes"]), []
     scan_id = now.strftime("%Y%m%d-%H%M") + f"-{mode}"
 
@@ -304,54 +365,115 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
             alert_updates[a["id"]] = {"last": last, "to_entry_pct": None if not last else round(100 * (float(a["entry"]) / last - 1), 2), "checked_at": iso(now),
                                       **({"withdrawn": True, "withdrawn_reason": fc["withdraw"]} if fc.get("withdraw") else {})}
 
-    # ---- new setups (after the daily close only)
-    entries, watch = [], []
+    # ---- new setups (after the daily close only): every A+ setup is served, none held back
+    entries, watch, near = [], [], {"coins": [], "more": 0, "waiting": []}
     day_bar = w["close"].index[-1]
     fresh = health["days_behind"] == 0
+    liquid_now = ind["liquid"].iloc[-1]
+    online = {tk for tk, u in uni.items() if u.get("status") == "online" and not u.get("peg")} if uni else set(liquid_now.index)
+    scanned = [tk for tk in liquid_now.index[liquid_now.values] if tk in online]
+    core_n = len([tk for tk in scanned if bool(ind["is_core"][tk].iloc[-1])])
+    universe = {"scanned": len(scanned), "core": core_n, "wide": len(scanned) - core_n, "listed": len(online),
+                "min_dollar_vol": float((P.get("universe") or {}).get("min_dv") or I.MIN_DV), "core_dollar_vol": I.CORE_DV}
+    min_week = int((P.get("pace") or {}).get("min_week", 5))
+    vf = day_bar + pd.Timedelta(days=1)
+    wk0 = vf.normalize() - pd.Timedelta(days=vf.weekday())                      # Monday 00:00 UTC of the order's week
+    served = {a.get("id") for a in state["alerts"].values() if a.get("type") == "entry" and a.get("grade") == "A+" and not a.get("topup")
+              and (_naive(a.get("valid_from")) or pd.Timestamp(0)) >= wk0 and (_naive(a.get("valid_from")) or pd.Timestamp(0)) < wk0 + pd.Timedelta(days=7)}
+    # a check run does the daily-close work too if the close scan for this bar never happened (missed run, late feed)
+    book = f"{version.info().get('fingerprint')}|{P.get('rev')}|{P.get('calibrated_at')}"       # engine code + strategy book in force
+    closed_for_bar = any(sc.get("mode") == "close" and sc.get("signal_date") == str(day_bar.date()) and not sc.get("skipped_setups") and sc.get("book") == book
+                         for sc in state["scans"].values())
+    catch_up = mode == "check" and fresh and not closed_for_bar
+    skipped_setups = False
+    if catch_up:
+        mode = "close"
+        notes.append(f"Catch-up: no daily-close scan had run for {day_bar.date()} with the current strategy book, so this run looked for new setups too. Setups whose entry price already traded were left out.")
     if mode == "close":
         if not fresh:
-            notes.append("Prices are behind, so no new setups were generated from stale bars.")
+            skipped_setups = True
+            notes.append("Prices are behind, so no new setups were generated from stale bars. The next run catches up as soon as the feed does.")
         else:
             found, n2 = find_entries(ind, P, uni, mkt["condition"], paused)
             notes += n2
-            vf = day_bar + pd.Timedelta(days=1)
-            slots = max(0, int(settings.get("max_open_positions", 4)) - fund["open_count"])
+            if catch_up or now >= day_bar + pd.Timedelta(days=1, hours=2):       # late: drop what the market already took
+                late = []
+                for e in found:
+                    ex = extremes_since(e["ticker"], day_bar + pd.Timedelta(days=1), w, part, hourly)
+                    gone = e["entry_kind"] == "open_next" or (ex["low"] is not None and ex["low"] < e["entry"]) or (ex["high"] is not None and ex["high"] >= e["target"])
+                    if gone and e["grade"] == "A+":
+                        late.append(e["ticker"])
+                    e["_gone"] = gone
+                found = [e for e in found if not e.pop("_gone")]
+                if late:
+                    notes.append("Too late for: " + ", ".join(late) + " (the entry or target already traded before this run).")
+            try:
+                near = radar(ind, P, uni, mkt["condition"], paused)
+            except Exception as e:
+                errors.append(f"radar: {e}"[:160])
+            near["coins"] = [r for r in near["coins"] if r["ticker"] not in {e["ticker"] for e in found if e["grade"] == "A+"}]
+            slots = max(0, int(settings.get("max_open_positions", P["risk"].get("max_open_positions", 4))) - fund["open_count"])
+            min_order = float(P["risk"].get("min_order_usd", 25.0))
             cash, rank = fund["cash"], 0
+            target_now = min(min_week, vf.weekday() + 1)
+            aplus = [e for e in found if e["grade"] == "A+" and e["ticker"] not in live_tickers]
+            tu = P.get("topup") or {}
+            deficit = max(0, target_now - len(served | {f"{vf.strftime('%Y%m%d')}-{e['ticker']}-{e['strategy']}" for e in aplus}))
+            topups = [e for e in found if e["grade"] == "A" and e["ticker"] not in live_tickers and e["win_pct"] >= 100 * float(tu.get("floor") or 1)][:deficit] if tu.get("ok") else []
             for e in found:
-                if e["ticker"] in live_tickers:
+                if e["ticker"] in live_tickers or e in aplus or e in topups:
                     continue
-                if e["grade"] != "A+":
-                    if e["grade"] == "A":
-                        watch.append({k: e[k] for k in ("ticker", "strategy_label", "score", "win_pct", "entry", "stop", "target", "rr", "hold_max_days", "cell_n")})
-                    continue
+                if e["grade"] == "A":
+                    watch.append({k: e.get(k) for k in ("ticker", "strategy_label", "score", "win_pct", "entry", "stop", "target", "rr", "hold_max_days", "cell_n", "tier")})
+            for e in aplus + topups:
                 rank += 1
-                sz = size_position(e["entry"], e["stop"], fund["capital"], cash, gov["risk_pct"], settings, P["risk"].get("min_order_usd", 25.0))
-                featured = rank <= int(P["risk"].get("max_per_day", 3)) and rank <= max(slots, 0) and sz["total_cost"] >= P["risk"].get("min_order_usd", 25.0)
-                if featured:
+                is_top = e in topups
+                funded = slots > 0 and cash >= min_order
+                sz = size_position(e["entry"], e["stop"], fund["capital"], cash if funded else 0.0, gov["risk_pct"], settings, min_order, e.get("min_size"))
+                funded = funded and sz["total_cost"] >= min_order
+                if funded:
                     cash -= sz["total_cost"]
+                    slots -= 1
                 vu = vf + pd.Timedelta(days=e["valid_days"])
                 aid = f"{vf.strftime('%Y%m%d')}-{e['ticker']}-{e['strategy']}"
                 order = (f"Buy {sz['qty']:g} {e['ticker']} at market now (about ${sz['total_cost']:,.2f})" if e["entry_kind"] == "open_next" else
                          f"Buy limit {sz['qty']:g} {e['ticker']} at {e['entry']:.6g} (about ${sz['total_cost']:,.2f}), post-only if offered; cancel if unfilled by {iso(vu)[:16].replace('T', ' ')} UTC")
+                tier_txt = "" if e["tier"] == "core" else " This coin is on the wider list (thinner trading): the record shown is for wider-list coins, tested with harsher fills. Use a limit order only and expect a wider spread."
                 why = [f"{e['strategy_label']}: {e['about']}",
                        f"Market now: {mkt['label']}. In this condition the setup won {e['win_pct']:.0f}% of {e['cell_n']} tested trades after fees"
-                       + (f" ({100 * e['cell_train']:.0f}% in the training years, {100 * e['cell_oos']:.0f}% on unseen data)." if e.get("cell_train") is not None and e.get("cell_oos") is not None else "."),
+                       + (f" ({100 * e['cell_train']:.0f}% in the training years, {100 * e['cell_oos']:.0f}% on unseen data)." if e.get("cell_train") is not None and e.get("cell_oos") is not None else ".") + tier_txt,
                        f"Coin: RSI(2) {e['rsi2']}, {e['vs_50d_pct']:+.1f}% vs its 50-day average, 90-day strength rank {e['rs_pct']}/100, daily range about {e['atr_pct']}%.",
                        f"After fees: +{e['net_win_pct']:.1f}% at the target, {e['net_loss_pct']:.1f}% at the stop (reward to risk {e['rr']:.2f})."]
-                doc = {**e, **sz, "id": aid, "type": "entry", "status": "new", "rank": rank, "also_qualified": not featured,
-                       "capacity_note": None if featured else ("No free slot or cash for it today; listed so you can swap into it." if rank > slots or sz["total_cost"] < 25 else "Beyond today's top setups."),
+                if e.get("confluence", 1) > 1:
+                    cf = {r["agree"]: r for r in (P.get("confluence") or [])}
+                    one, many = cf.get("1 strategy"), cf.get("2 strategies" if e["confluence"] == 2 else "3 or more")
+                    why.insert(1, f"Confirmed by {e['confluence']} A+ strategies (also {', '.join(e['also_by'])})."
+                               + (f" On unseen data, setups with this much agreement won {100 * many['win_rate']:.0f}% of {many['trades']}, against {100 * one['win_rate']:.0f}% with one strategy alone." if one and many else ""))
+                if is_top:
+                    why.insert(1, f"Top-up: grade A, not A+. Sent because the week is behind its pace of {min_week} setups and this rule passed the top-up test on unseen data.")
+                doc = {**e, **sz, "id": aid, "type": "entry", "status": "new", "rank": rank, "also_qualified": not funded, "funded": funded, "topup": is_top,
+                       "capacity_note": None if funded else "A+ and fully valid, but the account has no free slot or cash for it right now. The size shown is what it would be with free cash: take it only if you skip a higher-ranked one or a position closes first.",
                        "valid_from": iso(vf), "valid_until": iso(vu), "created_at": iso(now), "scan_id": scan_id, "order": order, "why": why,
                        "after_fill": f"Once filled: place a stop-loss (stop-market) sell at {e['stop']:.6g} and a limit sell at {e['target']:.6g} for the full size. {e['exit_signal']} Out by the end of day {e['hold_max_days']} regardless.",
                        "risk_note": gov["reason"], "news": {"verdict": "unchecked"}}
+                doc.pop("min_size", None)
                 entries.append(doc)
                 if aid not in state["alerts"]:
                     _write(out, writes, "set", "alerts", aid, doc)
-    counts = {"aplus": len([e for e in entries if not e["also_qualified"]]), "also_qualified": len([e for e in entries if e["also_qualified"]]),
-              "watchlist": len(watch), "exit_alerts": len(exit_alerts), "open_positions": len(positions),
+    served |= {e["id"] for e in entries if not e["topup"]}
+    dow = (now.normalize() - wk0).days if now >= wk0 else 0
+    target_now = min(min_week, max(1, min(7, dow + 1)))
+    pace = {"week_start": str(wk0.date()), "min_week": min_week, "served": len(served), "target_by_now": target_now,
+            "behind": len(served) < target_now, "topups_on": bool((P.get("topup") or {}).get("ok")),
+            "note": None if len(served) >= target_now else ("Behind the weekly pace. Top-ups are off because lower-grade setups lost money in testing, so the gap is closed only by finding more genuine A+ setups: "
+                                                           "the daily research run is pointed at the current market condition.")}
+    counts = {"aplus": len([e for e in entries if not e["topup"]]), "funded": len([e for e in entries if e["funded"]]), "also_qualified": len([e for e in entries if e["also_qualified"]]),
+              "topups": len([e for e in entries if e["topup"]]), "watchlist": len(watch), "radar": len(near["coins"]) + near["more"], "exit_alerts": len(exit_alerts), "open_positions": len(positions),
               "orders_checked": len(fill_checks), "fills_likely": len([f for f in fill_checks if f.get("filled")])}
     active = [sid for sid, r in P["strategies"].items() if r.get("enabled") and sid not in paused and (not r.get("market_conditions") or mkt["condition"] in r["market_conditions"])]
-    scan = {"id": scan_id, "mode": mode, "started_at": iso(now), "status": "ok" if not errors else "partial", "data": {**health, "prices_as_of": asof, "tradable": len([1 for u in uni.values() if u.get("tradable")])},
-            "market": mkt, "counts": counts, "positions": positions, "fill_checks": fill_checks, "alert_updates": alert_updates, "watchlist": watch[:12],
+    scan = {"id": scan_id, "mode": mode, "started_at": iso(now), "status": "ok" if not errors else "partial", "data": {**health, "prices_as_of": asof, "tradable": len(scanned)},
+            "market": mkt, "counts": counts, "positions": positions, "fill_checks": fill_checks, "alert_updates": alert_updates, "watchlist": watch[:20],
+            "radar": near, "pace": pace, "universe": universe, "catch_up": catch_up, "skipped_setups": skipped_setups, "book": book,
             "notes": notes, "errors": errors, "risk": gov, "funds": fund, "strategies_active": active, "strategies_paused": paused,
             "signal_date": str(day_bar.date()), "engine": version.info(), "params_version": P.get("rev")}
     scan["headline"] = headline(scan, entries)
@@ -371,13 +493,19 @@ def headline(scan, entries) -> str:
         bits.append("⚠ prices behind")
     acts = [p for p in scan["positions"] if p["code"] not in ("HOLD",)]
     if c["aplus"]:
-        bits.append(f"{c['aplus']} A+ setup{'s' if c['aplus'] != 1 else ''} ({', '.join(e['ticker'] for e in entries if not e['also_qualified'])})")
+        names = [e["ticker"] for e in entries if not e["topup"]]
+        bits.append(f"{c['aplus']} A+ setup{'s' if c['aplus'] != 1 else ''} ({', '.join(names[:8])}{' +' + str(len(names) - 8) + ' more' if len(names) > 8 else ''})")
+    if c.get("topups"):
+        bits.append(f"{c['topups']} top-up")
     if acts:
         bits.append(", ".join(f"{p['ticker']} {p['label'].split(':')[0]}" for p in acts))
     if c["fills_likely"]:
         bits.append(f"{c['fills_likely']} order{'s' if c['fills_likely'] != 1 else ''} likely filled")
-    if not bits or bits == ["⚠ prices behind"]:
-        bits.append("No action needed" if scan["mode"] == "check" or not c["aplus"] else "")
+    if not [b for b in bits if not b.startswith("⚠")]:
+        if scan["mode"] == "close":
+            bits.append(f"No A+ setups today from {scan['universe']['scanned']} coins" + (f", {c['radar']} close" if c.get("radar") else ""))
+        else:
+            bits.append("No action needed")
     return " · ".join(b for b in bits if b) + f" · market {m['label']}"
 
 
@@ -400,12 +528,13 @@ def digest(scan, entries, exit_alerts) -> str:
         for f in fl:
             L.append(f"- {f['ticker']}: {f.get('withdraw') or f['text']}")
     if scan["mode"] == "close":
-        top = [e for e in entries if not e["also_qualified"]]
-        L += ["", f"NEW A+ SETUPS ({len(top)})"]
-        if not top:
-            L.append("None today. The filter only passes setups whose record in this market condition is strong in training and on unseen data. No trade is a position too.")
-        for e in top:
-            L += [f"- {e['ticker']} | {e['strategy_label']} | score {e['score']} | win odds {e['win_pct']:.0f}%",
+        u, pc, rd = scan["universe"], scan["pace"], scan["radar"]
+        L += ["", f"NEW A+ SETUPS ({len(entries)}) from {u['scanned']} Coinbase coins scanned ({u['core']} core, {u['wide']} wider list)"]
+        if not entries:
+            L.append("None today. The filter only passes setups whose record in this market condition is strong in training and on unseen data.")
+        for e in entries:
+            L += [f"- {e['ticker']} | {e['strategy_label']} | {'TOP-UP (grade A)' if e['topup'] else 'A+'}{'' if e['tier'] == 'core' else ' | wider list'}{'' if e.get('confluence', 1) < 2 else ' | ' + str(e['confluence']) + ' strategies agree'} | score {e['score']} | win odds {e['win_pct']:.0f}%"
+                  + ("" if e["funded"] else " | no free slot or cash right now"),
                   f"    Order: {e['order']}",
                   f"    Entry {e['entry']:.6g} | Stop {e['stop']:.6g} ({e['stop_pct']:+.1f}%) | Target {e['target']:.6g} ({e['target_pct']:+.1f}%) | reward:risk {e['rr']:.2f} after fees",
                   f"    Size {e['qty']:g} {e['ticker']} = ${e['total_cost']:,.2f} ({e['pct_of_capital']}% of capital), risk ${e['risk_usd']:,.2f}",
@@ -413,9 +542,12 @@ def digest(scan, entries, exit_alerts) -> str:
                   f"    {e['after_fill']}"]
             if (e.get("news") or {}).get("verdict") not in (None, "unchecked", "clean"):
                 L.append(f"    News: {e['news']['verdict']}: {e['news'].get('reason', '')}")
-        more = [e for e in entries if e["also_qualified"]]
-        if more:
-            L.append("Also qualified (no slot or cash today): " + ", ".join(f"{e['ticker']} ({e['strategy_label']}, {e['win_pct']:.0f}%)" for e in more))
+        L.append(f"Week so far: {pc['served']} A+ setup{'s' if pc['served'] != 1 else ''} served, pace {pc['target_by_now']} by today, minimum {pc['min_week']} a week." + (" " + pc["note"] if pc.get("note") else ""))
+        if rd["coins"]:
+            L.append("On the radar (one condition short of an A+ signal): " + "; ".join(f"{r['ticker']} ({r['strategy_label']}: needs {r['needs']}{', ' + r['now'] if r['now'] else ''})" for r in rd["coins"][:8])
+                     + (f" and {rd['more'] + max(0, len(rd['coins']) - 8)} more" if rd["more"] or len(rd["coins"]) > 8 else ""))
+        for x in rd["waiting"][:6]:
+            L.append(f"Waiting on the market: {x['strategy_label']} needs {x['needs']}" + (f" ({x['now']})" if x["now"] else "") + (f"; {x['coins_ready']} coin{'s' if x['coins_ready'] != 1 else ''} otherwise ready" if x.get("coins_ready") else ""))
         if scan["watchlist"]:
             L.append("Watchlist (grade A, not sent as alerts): " + ", ".join(f"{x['ticker']} ({x['win_pct']:.0f}%)" for x in scan["watchlist"]))
     hold = [p for p in scan["positions"] if p["code"] == "HOLD"]
@@ -443,13 +575,13 @@ def apply_news(out_dir, verdicts: list[str], issues: list[str]):
             continue
         e["news"] = n
         if n["verdict"] == "avoid":
-            e.update({"withdrawn": True, "withdrawn_reason": "News check: " + (n["reason"] or "avoid"), "also_qualified": True})
+            e.update({"withdrawn": True, "withdrawn_reason": "News check: " + (n["reason"] or "avoid"), "also_qualified": True, "funded": False})
         elif n["verdict"] == "caution":
             e["score"] = round(e["score"] - 8, 1)
     live = sorted([e for e in entries if not e.get("withdrawn")], key=lambda e: -e["score"])
     for i, e in enumerate(live):
         e["rank"] = i + 1
-    scan["counts"]["aplus"] = len([e for e in entries if not e["also_qualified"] and not e.get("withdrawn")])
+    scan["counts"]["aplus"] = len([e for e in entries if not e.get("topup") and not e.get("withdrawn")])
     scan["news_checked"] = sorted(v)
     if issues:
         scan["run_issues"] = list(scan.get("run_issues", [])) + issues

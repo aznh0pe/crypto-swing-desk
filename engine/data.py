@@ -47,6 +47,17 @@ def fetch_branch(dest: str, repo: str = REPO, branch: str = "data", attempts: in
     return report
 
 
+def naive_ts(t, default=None):
+    """Any timestamp text -> naive UTC pandas Timestamp (or `default` when it cannot be read)."""
+    try:
+        t = pd.Timestamp(t)
+    except Exception:
+        return default
+    if pd.isna(t):
+        return default
+    return t.tz_convert(None) if t.tzinfo is not None else t
+
+
 def _json(path, default=None):
     try:
         return json.loads(pathlib.Path(path).read_text())
@@ -91,7 +102,13 @@ def load_daily(d, drop_partial: bool = True):
     so no rule ever reads an unfinished bar as final."""
     d = pathlib.Path(d)
     meta = load_meta(d)
-    w = _wide(pd.read_csv(d / "daily.csv.gz", dtype={"ticker": str}), "date")
+    df = pd.read_csv(d / "daily.csv.gz", dtype={"ticker": str})
+    if (d / "recent.csv.gz").exists():        # the feed's small every-pass file: the latest days incl. the forming bar
+        try:
+            df = pd.concat([df, pd.read_csv(d / "recent.csv.gz", dtype={"ticker": str})], ignore_index=True).drop_duplicates(["date", "ticker"], keep="last")
+        except Exception:
+            pass
+    w = _wide(df, "date")
     part = None
     today = pd.Timestamp.now(tz="UTC").tz_localize(None).normalize()
     pday = pd.Timestamp(meta["partial_day"]) if meta.get("partial_day") else today
@@ -138,12 +155,12 @@ def health(w: dict, meta: dict, now=None) -> dict:
     if meta.get("generated_utc"):
         try:
             age = (now - pd.Timestamp(meta["generated_utc"]).tz_convert(None)).total_seconds() / 60
-            if age > 180:
+            if age > 45:
                 status = "stale" if status == "ok" else status
-                notes.append(f"The price feed last refreshed {age / 60:.1f} hours ago.")
+                notes.append(f"The price feed last refreshed {age:.0f} minutes ago (it should refresh every 10)." if age < 120 else f"The price feed last refreshed {age / 60:.1f} hours ago (it should refresh every 10 minutes).")
         except Exception:
             pass
     if meta.get("problems"):
         notes.append("Feed problems: " + "; ".join(meta["problems"][:3]))
     return {"status": status, "last_bar": str(last.date()), "expected_bar": str(expected.date()), "days_behind": max(lag, 0),
-            "feed_age_min": None if age is None else round(age), "pairs": int(w["close"].shape[1]), "notes": notes}
+            "feed_age_min": None if age is None else max(0, round(age)), "pairs": int(w["close"].shape[1]), "notes": notes}

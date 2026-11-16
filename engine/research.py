@@ -23,7 +23,8 @@ from .portfolio import load_state
 
 HERE = pathlib.Path(__file__).resolve().parent
 STATE_FEATURES = ["rsi2", "rsi14", "atr_pct", "dist20", "dist50", "dist200", "dd90", "rs_pct", "rs30_pct", "vol_ratio", "ret7", "ret30",
-                  "adx14", "btc_dist200", "btc_dist50", "btc_ret7", "btc_ret30", "btc_vol_ratio", "btc_rsi14", "breadth50", "breadth200", "alt_ret7", "fng"]
+                  "adx14", "btc_dist200", "btc_dist50", "btc_ret7", "btc_ret30", "btc_vol_ratio", "btc_rsi14", "breadth50", "breadth200", "alt_ret7", "fng",
+                  "washed", "flush7", "up7", "dv30"]
 
 
 def seeds() -> list:
@@ -55,6 +56,12 @@ def cmd_next(state_dir, out_dir) -> dict:
         fam[f] = fam.get(f, 0) + 1
     focus = ("No A+ strategy trades in: " + ", ".join(I.CONDITION_LABEL[c] for c in thin) + ". Design for those conditions first." if thin else
              "Every market condition has at least one A+ strategy. Raise the win rate: look for a filter or a new trigger that beats the weakest A+ cell.")
+    pace = (st["learning"].get("stats") or {}).get("pace") or {}
+    if pace:
+        focus += (f" Weekly pace: {pace.get('this_week', 0)} A+ setups sent this week against a pace of {pace.get('pace')} by today (minimum {pace.get('min_week')} a week); "
+                  f"{pace.get('short_weeks', 0)} of the last {pace.get('weeks', 4)} weeks fell short." + (" The desk needs more genuine A+ setups in quiet weeks: prefer triggers that fire on days when the live book is silent." if pace.get("short_weeks") else ""))
+    focus += (" What is already known (see lessons): dip-buying only clears the bar in stressed markets or when Bitcoin is surging; plain dips, range lows, deep resting bids, streaks and rebound-confirmation entries all failed in calm bull and quiet bear markets at 0.5%/0.9% fees. "
+              "New quiet-market ideas should use a different trigger family or a much larger edge per trade; lower fees also move calm-bull dips over the bar.")
     res = {"next_seed": seed["id"] if seed else None, "spec_file": str((out / "seed_spec.json").resolve()) if seed else None,
            "backlog_left": [s["id"] for s in todo[1:]], "tested": [{"id": k, "label": v.get("label") or (v.get("spec") or {}).get("label"), "family": v.get("family") or (v.get("spec") or {}).get("family"),
                                                                      "verdict": v.get("verdict"), "summary": v.get("summary")} for k, v in sorted(tested.items())],
@@ -97,7 +104,7 @@ def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
         res = {"ok": False, "errors": errs}
         print(json.dumps(res, indent=1))
         return res
-    ind, w, part, meta = C.load_ind(data_dir)
+    ind, w, part, meta = C.load_ind(data_dir, P)
     b = I.base_masks(ind)
     r = C.evaluate(spec, ind, P, b)
     tr = r.pop("_trades")
@@ -118,7 +125,9 @@ def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
     else:
         verdict = "rejected"
     f = lambda s: f"{100 * s['win_rate']:.0f}% of {s['trades']} (PF {s.get('profit_factor')}, avg {100 * s['avg_ret']:+.1f}%)" if s.get("trades") else "no trades"
-    summary = f"Training {f(tr_n)}; unseen {f(te)}; overlap with live strategies {100 * ov:.0f}%. {r['reason']}"
+    wd = r.get("wide") or {}
+    summary = (f"Training {f(tr_n)}; unseen {f(te)}; " + (f"wider list {f(wd)}; " if wd.get("trades") else "")
+               + f"overlap with live strategies {100 * ov:.0f}%. {r['reason']}")
     rid = spec["id"]
     doc = {"id": rid, "spec": spec, "signature": sig, "about": spec.get("about"), "verdict": verdict, "summary": summary, "tested_at": C.now_iso(), "family": spec.get("family"),
            "label": spec.get("label"), "params": r["params"], "market_conditions": r["market_conditions"], "mode": r["mode"],
@@ -141,8 +150,8 @@ def cmd_states(spec_file, data_dir, out_dir) -> dict:
     if errs:
         print(json.dumps({"ok": False, "errors": errs}))
         return {"ok": False}
-    P = S.params_with_defaults(None)
-    ind, *_ = C.load_ind(data_dir)
+    P = S.load_params(None)
+    ind, *_ = C.load_ind(data_dir, P)
     plan = rules.build_plan(spec, ind, P, I.base_masks(ind), name=spec["id"])
     t = bt.done(bt.simulate(plan, ind, P["costs"], manage=P.get("manage")))
     if t.empty:
@@ -163,6 +172,8 @@ def cmd_states(spec_file, data_dir, out_dir) -> dict:
                      "oos_days": int(len(do_)), "oos_day_win": round(float((do_ > 0).mean()), 3)})
     for c in I.CONDITIONS:
         add(I.CONDITION_LABEL[c], f'market_conditions: ["{c}"]', a["condition"] == c, o["condition"] == c)
+    add("Core list coins", "is_core > 0.5", a["tier"] == "core", o["tier"] == "core")
+    add("Wider list coins", "is_core < 0.5", a["tier"] == "wide", o["tier"] == "wide")
     for f in STATE_FEATURES:
         if f not in t or t[f].notna().sum() < 60:
             continue
@@ -193,7 +204,7 @@ def cmd_promote(data_dir, state_dir, out_dir) -> dict:
         res = {"promoted": [], "note": "No new candidate waiting for promotion."}
         print(json.dumps(res))
         return res
-    ind, *_ = C.load_ind(data_dir)
+    ind, *_ = C.load_ind(data_dir, P)
     b, promoted, notes = I.base_masks(ind), [], []
     for r in sorted(cands, key=lambda r: str(r.get('tested_at')))[:3]:
         ev = C.evaluate(r["spec"], ind, P, b)
@@ -203,13 +214,15 @@ def cmd_promote(data_dir, state_dir, out_dir) -> dict:
             continue
         if ev["market_conditions"]:
             tr = tr[tr["condition"].isin(ev["market_conditions"])]
-        cells = C.grade_table(tr, P["split"], P["grading"]).get(r["id"], {})
+        cells = C.grade_table(C.tier_of(tr, "core"), P["split"], P["grading"]).get(r["id"], {})
+        cells_w = C.grade_table_wide(C.tier_of(tr, "wide"), {r["id"]: cells}, P["grading"]).get(r["id"], {})
         if not any(c.get("grade") in ("A+", "A") for c in cells.values()):
             notes.append(f"{r['id']}: passes the bar but none of its condition cells grades A or A+, so it would never alert")
             continue
         P.setdefault("custom", {})[r["id"]] = {"spec": r["spec"], "promoted_at": C.now_iso()}
         P["strategies"][r["id"]] = {"enabled": True, "params": ev["params"], "market_conditions": ev["market_conditions"], "mode": ev["mode"]}
         P.setdefault("grade_table", {})[r["id"]] = cells
+        P.setdefault("grade_table_wide", {})[r["id"]] = cells_w
         promoted.append(r["id"])
         notes.append(f"{r['id']} promoted: {ev['reason']} A+ in: " + (", ".join(c for c, v in cells.items() if v.get("grade") == "A+") or "none yet (watchlist grade)"))
     res = {"promoted": promoted, "note": " ".join(notes)}

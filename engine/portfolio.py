@@ -5,7 +5,7 @@ import json
 import math
 import pathlib
 
-DEFAULT_SETTINGS = {"initial_balance": 1500.0, "income_default_pct": 0.0, "max_open_positions": 4, "risk_pct": 1.5,
+DEFAULT_SETTINGS = {"initial_balance": 1500.0, "income_default_pct": 0.0, "max_open_positions": 8, "risk_pct": 2.0,
                     "max_position_pct": 30.0, "maker_fee_pct": 0.50, "taker_fee_pct": 0.90, "exchange": "Coinbase Advanced"}
 # Risk governor: full risk per trade is earned by the live record. Size steps down to the floor while the account is
 # 8%+ below its peak (realised) or the last 15 closed trades won under 55%; it steps back up once the drawdown is
@@ -131,14 +131,24 @@ def risk_governor(state: dict, capital: float) -> dict:
             "reason": f"Full size ({full:.2f}% risk a trade): account {100 * dd:.1f}% below its peak."}
 
 
-def _round_qty(q: float) -> float:
+def _round_qty(q: float, step=None) -> float:
+    """Order size the exchange accepts: floored to the coin's size step (never rounded up past the budget)."""
     if q <= 0:
         return 0.0
+    try:
+        step = float(step) if step else 0.0
+    except (TypeError, ValueError):
+        step = 0.0
+    if step > 0:
+        n = math.floor(q / step + 1e-9)
+        dec = max(0, -int(math.floor(math.log10(step) + 1e-9)))
+        return float(round(n * step, min(10, dec)))
     digits = max(0, 4 - int(math.floor(math.log10(q))) - 1)   # four significant figures
-    return float(round(q, min(8, digits)))
+    f = 10 ** min(8, digits)
+    return math.floor(q * f + 1e-9) / f
 
 
-def size_position(entry: float, stop: float, capital: float, cash: float, risk_pct: float, settings: dict, min_order: float = 25.0) -> dict:
+def size_position(entry: float, stop: float, capital: float, cash: float, risk_pct: float, settings: dict, min_order: float = 25.0, step=None) -> dict:
     """Coins to buy: risk_pct of capital lost at the stop (fees included), capped by the position limit and free cash."""
     maker, taker = float(settings.get("maker_fee_pct", 0.5)) / 100, float(settings.get("taker_fee_pct", 0.9)) / 100
     max_pct = float(settings.get("max_position_pct", 30.0))
@@ -152,7 +162,7 @@ def size_position(entry: float, stop: float, capital: float, cash: float, risk_p
     elif cash < min(by_risk, cap_usd):
         note = "Sized down to the cash that is free."
     cost = max(0.0, budget)
-    qty = _round_qty(cost / entry)
+    qty = _round_qty(cost / entry, step)
     cost = round(qty * entry, 2)
     if cost < min_order:
         note = f"Too small to place (under ${min_order:.0f}) with the cash that is free."

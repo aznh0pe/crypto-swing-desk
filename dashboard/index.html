@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
+
 /* Crypto Swing Desk. Same design system as the Swing Desk (stocks), teal accent. Layout: a trading blotter. Sticky desk bar + tab strip, dense tables, order-ticket cards with a price ladder. */
 :root {
   --bg: #f1f4f4; --surface: #ffffff; --surface-2: #e8eeee; --ink: #0f1720; --ink-2: #445063; --ink-3: #657084;
@@ -329,6 +330,12 @@ pre.digest { white-space: pre-wrap; font-family: var(--f-mono); font-size: 12px;
 .steps { margin: 0; padding-left: 20px; display: grid; gap: 4px; }
 .kv { display: grid; grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); gap: 4px 14px; font-size: 13px; }
 .kv dt { color: var(--ink-3); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+
+/* audit 2026-11-16: tiers, radar, health */
+.tag.wide { background: var(--surface-2); color: var(--ink-2); }
+.stamp.topup { filter: saturate(.4); }
+.heat td.c .dim { font-weight: 400; color: var(--ink-2); }
+.heat td.c > div { line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -349,7 +356,7 @@ pre.digest { white-space: pre-wrap; font-family: var(--f-mono); font-size: 12px;
 const S = { settings: null, alerts: [], alertsRaw: [], trades: [], ledger: [], scans: [], journal: [], params: null, backtest: null,
   research: [], results: [], learning: {}, loaded: {}, db: null, mcp: null, tab: "overview", perf: "all", dbError: null, starting: false };
 const TABS = [["overview", "Overview"], ["alerts", "Alerts"], ["log", "Trade log"], ["funds", "Funds"], ["scans", "Scans"], ["lab", "Strategy lab"]];
-const DEFAULTS = { initial_balance: 1500, max_open_positions: 4, risk_pct: 2.0, max_position_pct: 30, maker_fee_pct: 0.5, taker_fee_pct: 0.9, exchange: "Coinbase Advanced" };
+const DEFAULTS = { initial_balance: 1500, max_open_positions: 8, risk_pct: 2.0, max_position_pct: 30, maker_fee_pct: 0.5, taker_fee_pct: 0.9, exchange: "Coinbase Advanced" };
 const COND = { bull_calm: "Calm bull", bull_stress: "Bull shake-out", bear_calm: "Quiet bear", bear_stress: "Bear selloff" };
 const COND_ORDER = ["bull_calm", "bull_stress", "bear_calm", "bear_stress"];
 const CHECKS = { train_n: "Trades in the training years", train_win: "Win rate, training years", train_pf: "Profit factor, training years", train_avg: "Average trade after fees, training years",
@@ -423,11 +430,53 @@ function statsOf(list) {
     avgPct: list.reduce((s, t) => s + (num(t.pnl_pct) || 0), 0) / n, avgHold: list.reduce((s, t) => s + (num(t.days_held) || 0), 0) / n, fees: list.reduce((s, t) => s + (num(t.fee_in) || 0) + (num(t.fee_out) || 0), 0) };
 }
 function holdEnd(t) { const at = new Date(t.entry_at || t.created_at || Date.now()); const day0 = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()); return day0 + (num(t.hold_max_days) || 7) * 86400000; }
+const tierTag = (a) => (a.tier === "wide" ? ` <span class="tag wide" title="Wider list: under $2M traded a day. Graded on its own record with harsher fill assumptions. Limit orders only.">wider list</span>` : "");
+const SCAN_SLOTS = [[0, 20, "Daily close"], [13, 20, "Check"], [19, 20, "Check"]];      // UTC hour, minute
+function deskHealth() {
+  // which scheduled scans of the last 26 hours actually ran (a scan within 3 hours after its slot counts)
+  const now = Date.now(), out = [];
+  for (let back = 1; back >= 0; back--) for (const [h, m, name] of SCAN_SLOTS) {
+    const d = new Date(now - back * 86400000), t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), h, m);
+    const first = S.scans.length ? Date.parse(S.scans[S.scans.length - 1].started_at) : Infinity;      // nothing was due before the desk's first scan
+    if (t < now - 26 * 3600000 || t > now - 45 * 60000 || t < first) continue;
+    const hit = S.scans.find((x) => { const st = Date.parse(x.started_at); return st >= t - 20 * 60000 && st <= t + 3 * 3600000; });
+    out.push({ at: new Date(t).toISOString(), name, scan: hit || null });
+  }
+  return out;
+}
+function healthPanel() {
+  const rows = deskHealth(), last = S.scans[0], missed = rows.filter((r) => !r.scan), runs = S.journal.find((j) => j.runs)?.runs;
+  const feed = last?.data?.feed_age_min;
+  return `<div class="panel"><div class="section-head"><h3>Desk health</h3><span class="meta">${missed.length ? pill("crit", `${missed.length} scheduled scan${missed.length === 1 ? "" : "s"} missed`) : rows.length ? pill("good", "All scheduled scans ran") : ""}</span></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Scheduled</th><th>Run</th><th>Ran</th><th>Prices at the scan</th><th>Result</th></tr></thead><tbody>
+    ${rows.length ? rows.slice().reverse().map((r) => `<tr><td>${dtPT(r.at)}</td><td>${esc(r.name)}</td><td>${r.scan ? pill(r.scan.status === "ok" && !(r.scan.run_issues || []).length ? "good" : "warn", dtPT(r.scan.started_at)) : pill("crit", "did not run")}</td>
+      <td class="small">${r.scan ? (r.scan.data?.status === "ok" ? "fresh" : `<b class="caution-word">behind</b>`) + (r.scan.data?.feed_age_min != null ? ` · feed ${esc(r.scan.data.feed_age_min)} min old` : "") : "–"}</td><td class="small">${esc(r.scan?.headline || "")}</td></tr>`).join("") : `<tr><td colspan="5" class="muted">No scheduled scan was due in the last day.</td></tr>`}</tbody></table></div>
+    <div class="small muted">Scans run at 00:20, 13:20 and 19:20 UTC every day. Prices come from Coinbase and refresh every 10 minutes${feed != null ? ` (${esc(feed)} minutes old at the last scan)` : ""}. If a daily-close scan is missed or prices are late, the next run catches up on new setups by itself.${runs && !runs.ok && runs.missed?.length ? ` The daily review flagged: ${esc(runs.missed.join(", "))}.` : ""}</div></div>`;
+}
+function pacePanel() {
+  const sc = S.scans.find((x) => x.pace), B = S.backtest, pc = sc?.pace, u = S.scans.find((x) => x.universe)?.universe, rd = S.scans.find((x) => x.mode === "close" && x.radar)?.radar;
+  if (!pc && !u) return "";
+  const hist = B?.pace?.last_52_weeks, tu = B?.pace?.topup;
+  const near = rd?.coins || [], wait = rd?.waiting || [];
+  return `<section class="section"><div class="section-head"><h2>Pace and radar</h2><span class="meta">Every A+ setup is served, none held back</span></div>
+    <div class="grid g-kpi">
+      ${pc ? kpi("A+ setups this week", `${esc(pc.served)}`, `Pace ${esc(pc.target_by_now)} by today · minimum ${esc(pc.min_week)} a week${pc.behind ? " · " + `<b class="caution-word">behind</b>` : ""}`) : ""}
+      ${u ? kpi("Coins scanned", esc(u.scanned), `${esc(u.core)} core · ${esc(u.wide)} wider list · of ${esc(u.listed)} on Coinbase`) : ""}
+      ${kpi("One condition away", String(near.length + (rd?.more || 0)), near.length ? "Coins closest to an A+ signal" : "Nothing is close today")}
+      ${hist ? kpi("Weeks with an A+ setup", pct(100 * hist.weeks_with_any, 0), `Last 52 weeks in the backtest · ${pct(100 * hist.weeks_at_min, 0)} reached ${esc(hist.min_week)}`) : ""}
+    </div>
+    ${pc?.note ? `<div class="banner info" style="margin-bottom:12px">${esc(pc.note)}</div>` : ""}
+    ${near.length ? `<div class="tbl-wrap"><table><thead><tr><th>On the radar</th><th>Strategy</th><th>Still needs</th><th>Where it stands</th><th class="n">Win est. if it triggers</th></tr></thead><tbody>
+      ${near.map((r) => `<tr><td><span class="t">${esc(r.ticker)}</span>${tierTag(r)}</td><td class="small">${esc(r.strategy_label)}</td><td class="small">${esc(r.needs)}</td><td class="small">${esc(r.now || "")}</td><td class="n">${pct(r.win_pct, 0)}</td></tr>`).join("")}</tbody></table></div>${rd.more ? `<p class="small muted">and ${esc(rd.more)} more coins one condition away.</p>` : ""}` : ""}
+    ${wait.length ? `<div class="tbl-wrap"><table><thead><tr><th>Waiting on the market</th><th>Needs</th><th>Now</th><th class="n">Coins otherwise ready</th></tr></thead><tbody>
+      ${wait.map((x) => `<tr><td><b>${esc(x.strategy_label)}</b></td><td class="small">${esc(x.needs)}</td><td class="small">${esc(x.now || "")}</td><td class="n">${esc(x.coins_ready ?? "–")}</td></tr>`).join("")}</tbody></table></div>` : ""}
+    <p class="small muted">The radar is a heads-up, not a signal: nothing here is an order until a daily close confirms every condition. ${tu && !tu.ok ? esc(tu.note || "") : ""}</p></section>`;
+}
 function latestScan(withMarket) { return S.scans.find((x) => (withMarket ? x.market : true)); }
 
 // ---------------------------------------------------------------- shell
 function renderTabs() {
-  const n = S.alerts.filter((a) => entryLive(a) && a.status === "new" && !a.also_qualified).length + toResolve().length + exitAlerts().length;
+  const n = S.alerts.filter((a) => entryLive(a) && a.status === "new").length + toResolve().length + exitAlerts().length;
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" type="button" id="tab-${k}" aria-selected="${S.tab === k}" data-tab="${k}">${l}${k === "alerts" && n ? `<span class="count">${n}</span>` : ""}</button>`).join("");
 }
 function renderChips() {
@@ -480,6 +529,8 @@ function attention() {
   if (ex.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Action needed: ${ex.map((a) => `${esc(a.ticker)} ${esc(String(a.label || "").split(":")[0].toLowerCase())}`).join(", ")}.</b> <button class="btn small" type="button" data-tab="alerts">Open alerts</button></div>`;
   if (res.length) out += `<div class="banner info" style="margin-bottom:12px"><b>${res.map((a) => esc(a.ticker)).join(", ")}: did ${res.length === 1 ? "this order" : "these orders"} fill?</b> The order window is over. Record the result so the desk watches the position. <button class="btn small" type="button" data-tab="alerts">Answer</button></div>`;
   const last = S.scans[0];
+  const miss = deskHealth().filter((r) => !r.scan);
+  if (miss.length && !(last && Date.now() - Date.parse(last.started_at) > 26 * 3600000)) out += `<div class="banner warn" style="margin-bottom:12px"><b>${miss.length} scheduled scan${miss.length === 1 ? "" : "s"} did not run</b> (${miss.map((r) => dtPT(r.at)).join(", ")}). ${last ? `The last scan was ${dtPT(last.started_at)}.` : ""} The next run catches up; press Scan now to do it right away. <button class="btn small" type="button" data-tab="scans">Desk health</button></div>`;
   if (last && Date.now() - Date.parse(last.started_at) > 26 * 3600000) out += `<div class="banner warn" style="margin-bottom:12px"><b>No scan in over a day</b> (last: ${dtPT(last.started_at)}). Open positions are not being checked. Press Scan now, or open the Crypto Swing Desk chat.</div>`;
   if (last?.data?.status && last.data.status !== "ok") out += `<div class="banner warn" style="margin-bottom:12px"><b>Prices were behind at the last scan.</b> ${esc((last.data.notes || []).join(" "))}</div>`;
   if (last?.run_issues?.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Problem in the last scan:</b> ${last.run_issues.map(esc).join(" ")}</div>`;
@@ -487,23 +538,22 @@ function attention() {
 }
 function marketPanel() {
   const sc = latestScan(true); if (!sc) return `<div class="empty"><b>No scans have run yet.</b> The first scan writes the market condition, A+ setups and position checks here.</div>`;
-  const m = sc.market, P = S.params, T = P?.grade_table || {}, specs = S.backtest?.strategies || {};
-  const here = Object.keys(T).filter((s) => P.strategies?.[s]?.enabled && T[s][m.condition] && (!(P.strategies[s].market_conditions || []).length || P.strategies[s].market_conditions.includes(m.condition)))
-    .map((s) => ({ s, c: T[s][m.condition] })).sort((a, b) => b.c.p - a.c.p);
-  const ap = here.filter((x) => x.c.grade === "A+");
+  const m = sc.market, P = S.params, T = P?.grade_table || {}, TW = P?.grade_table_wide || {}, specs = S.backtest?.strategies || {};
+  const ap = [...new Set([...Object.keys(T), ...Object.keys(TW)])].filter((s) => P.strategies?.[s]?.enabled && !P.retired?.[s] && (!(P.strategies[s].market_conditions || []).length || P.strategies[s].market_conditions.includes(m.condition))
+    && (T[s]?.[m.condition]?.grade === "A+" || TW[s]?.[m.condition]?.grade === "A+")).map((s) => ({ s }));
   return `<div class="panel"><div class="grid g-kpi" style="margin-bottom:10px">
     ${kpi("Market condition", esc(m.label), m.bull ? "Bitcoin above its 200-day average" : "Bitcoin below its 200-day average")}
-    ${kpi("Bitcoin", m.btc ? "$" + Math.round(m.btc).toLocaleString("en-US") : "–", `${spct(m.btc_vs_200d_pct)} vs 200-day · ${spct(m.btc_7d_pct)} in 7 days`)}
+    ${kpi("Bitcoin", (m.btc_now || m.btc) ? "$" + Math.round(m.btc_now || m.btc).toLocaleString("en-US") : "–", `${spct(m.btc_vs_200d_pct)} vs 200-day · ${spct(m.btc_7d_pct)} in 7 days`)}
     ${kpi("Breadth", m.breadth_above_50d_pct != null ? pct(m.breadth_above_50d_pct, 0) : "–", "Liquid coins above their 50-day")}
     ${kpi("Fear & Greed", m.fear_greed != null ? esc(m.fear_greed) : "–", m.fear_greed == null ? "" : m.fear_greed <= 25 ? "Extreme fear" : m.fear_greed <= 45 ? "Fear" : m.fear_greed < 55 ? "Neutral" : m.fear_greed < 75 ? "Greed" : "Extreme greed")}
     ${kpi("A+ strategies here", String(ap.length), ap.length ? ap.map((x) => esc(specs[x.s]?.label || x.s)).join(", ") : "None has an A+ record in this condition")}
-  </div><div class="small muted">${esc(m.rule || "")} As of the ${dtPT(sc.started_at)} scan · ${esc(sc.data?.tradable ?? "–")} tradable coins · daily bar closes in <span class="clock" id="utcClock">–</span> (4:00 PM PT in winter, 5:00 PM in summer).</div></div>`;
+  </div><div class="small muted">${esc(m.rule || "")} As of the ${dtPT(sc.started_at)} scan · ${esc(sc.universe?.scanned ?? sc.data?.tradable ?? "–")} coins scanned · daily bar closes in <span class="clock" id="utcClock">–</span> (4:00 PM PT in winter, 5:00 PM in summer).</div></div>`;
 }
 function viewOverview() {
   const f = funds(), st = settings(), all = closedTrades(), hist = statsOf(all);
   const month = todayPT().slice(0, 7), mtd = statsOf(all.filter((t) => fmtDay.format(new Date(t.exit_at)).slice(0, 7) === month));
   const ret = f.capital - f.initial - f.deposit - f.withdrawal;
-  const live = S.alerts.filter((a) => entryLive(a) && !a.also_qualified);
+  const live = S.alerts.filter(entryLive).sort((a, b) => (num(a.rank) ?? 99) - (num(b.rank) ?? 99));
   let h = attention() + `<section class="section"><div class="section-head"><h2>Account</h2><span class="meta">Started with ${money(st.initial_balance)} · ${esc(st.exchange)} · fees ${esc(st.maker_fee_pct)}% maker / ${esc(st.taker_fee_pct)}% taker</span></div>
   <div class="grid g-kpi">
     ${kpi("Trading capital", money(f.capital), `Equity incl. open P&L ${money(f.equity)}`)}
@@ -516,10 +566,10 @@ function viewOverview() {
   <section class="section"><div class="section-head"><h2>Market now</h2><span class="meta">The condition decides which strategies may trade</span></div>${marketPanel()}</section>
   <section class="section"><div class="section-head"><h2>A+ setups live</h2><span class="meta">${live.length ? "Full order tickets are on the Alerts tab" : ""}</span></div>
     ${live.length ? `<div class="tbl-wrap"><table><thead><tr><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Buy limit</th><th class="n">Stop</th><th class="n">Target</th><th class="n">Size</th><th>Time left to fill</th><th></th></tr></thead><tbody>
-      ${live.map((a) => `<tr><td><span class="t">${esc(a.ticker)}</span></td><td class="small">${esc(a.strategy_label)}</td><td class="n">${pct(a.win_pct, 0)}</td><td class="n">${fp(a.entry)}</td><td class="n">${fp(a.stop)}</td><td class="n">${fp(a.target)}</td><td class="n">${money(a.total_cost)}</td>
-        <td class="small">${windowOpen(a) ? span(Date.parse(a.valid_until) - Date.now()) + " left" : "opens " + dtPT(a.valid_from)}${a.status === "placed" ? " · " + pill("info", "placed") : ""}</td><td><button class="btn small" type="button" data-tab="alerts">Open</button></td></tr>`).join("")}</tbody></table></div>`
-      : `<div class="empty"><b>No A+ setup is live.</b> New setups land right after the daily bar closes (4:00 PM PT in winter). A day with none means nothing cleared the bar in this market condition, and sitting out is the trade.</div>`}</section>`;
-  h += positionsSection();
+      ${live.map((a) => `<tr><td><span class="t">${esc(a.ticker)}</span>${tierTag(a)}${a.topup ? ` <span class="tag">top-up</span>` : ""}</td><td class="small">${esc(a.strategy_label)}</td><td class="n">${pct(a.win_pct, 0)}</td><td class="n">${fp(a.entry)}</td><td class="n">${fp(a.stop)}</td><td class="n">${fp(a.target)}</td><td class="n">${money(a.total_cost)}</td>
+        <td class="small">${windowOpen(a) ? span(Date.parse(a.valid_until) - Date.now()) + " left" : "opens " + dtPT(a.valid_from)}${a.status === "placed" ? " · " + pill("info", "placed") : ""}${a.also_qualified && a.status !== "placed" ? " · " + pill("neutral", "no free slot or cash") : ""}</td><td><button class="btn small" type="button" data-tab="alerts">Open</button></td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty"><b>No A+ setup is live.</b> New setups land right after the daily bar closes (4:00 PM PT in winter). A day with none means nothing cleared the bar in this market condition; the radar below shows what is close.</div>`}</section>`;
+  h += pacePanel() + positionsSection();
   h += `<section class="section"><div class="section-head"><h2>Performance</h2><span class="meta">Your real fills, after fees</span></div>
     <div class="grid g-kpi">
       ${kpi("This month", `<span class="${signCls(mtd.pnl)}">${smoney(mtd.pnl || 0)}</span>`, mtd.n ? `${mtd.wins}/${mtd.n} won` : "No closed trades this month")}
@@ -578,8 +628,8 @@ function ticket(a) {
   const news = a.news?.verdict && a.news.verdict !== "unchecked" ? `<div><b>News check:</b> ${a.news.verdict === "clean" ? "clean" : `<b class="caution-word">${esc(a.news.verdict)}</b>`}${a.news.reason ? " · " + esc(a.news.reason) : ""}</div>` : `<div class="muted"><b>News check:</b> not run yet</div>`;
   const market = a.entry_kind === "open_next";
   return `<article class="ticket ${a.also_qualified ? "overcap" : ""}" aria-label="${esc(a.ticker)} setup">
-    <div class="t-head"><div class="stamp" aria-label="Grade ${esc(a.grade)}">${esc(a.grade || "A+")}</div><div class="t-title"><div class="tk">${esc(a.ticker)}</div><div class="nm">${esc(a.product || "")} · ${a.is_major ? "major" : "alt"}</div>
-      <div class="st">${a.rank ? `#${esc(a.rank)} · ` : ""}${esc(a.strategy_label)} · ${esc(a.family || "")}</div></div>
+    <div class="t-head"><div class="stamp ${a.topup ? "topup" : ""}" aria-label="Grade ${esc(a.grade)}">${esc(a.grade || "A+")}</div><div class="t-title"><div class="tk">${esc(a.ticker)}</div><div class="nm">${esc(a.product || "")} · ${a.is_major ? "major" : "alt"}${tierTag(a)}${a.topup ? ` <span class="tag">top-up</span>` : ""}</div>
+      <div class="st">${a.rank ? `#${esc(a.rank)} · ` : ""}${esc(a.strategy_label)} · ${esc(a.family || "")}${a.confluence > 1 ? ` · <b>${esc(a.confluence)} strategies agree</b>` : ""}</div></div>
       <div class="t-odds"><div class="lbl">Win est.</div><div class="big">${pct(a.win_pct, 0)}</div><div class="lbl">Score ${esc(a.score)}</div></div></div>
     <div class="t-body">${ladderSvg(a)}<div class="levels">
       <span class="lk">Target</span><span class="lv">${fp(a.target)}</span><span class="ld">${spct(a.target_pct)}</span>
@@ -647,16 +697,16 @@ function positionsSection() {
 function viewAlerts() {
   const st = settings(), f = funds(), res = toResolve(), ex = exitAlerts();
   const live = S.alerts.filter(entryLive).sort((a, b) => (num(a.rank) ?? 99) - (num(b.rank) ?? 99));
-  const feat = live.filter((a) => !a.also_qualified), extra = live.filter((a) => a.also_qualified);
+  const feat = live, held = live.filter((a) => a.also_qualified).length;
   const sc = S.scans.find((x) => x.mode === "close");
   let h = res.length ? `<section class="section"><div class="section-head"><h2>Did these orders fill?</h2><span class="meta">Their order windows are over</span></div><div class="grid">${res.map(resolveCard).join("")}</div></section>` : "";
   h += `<section class="section"><div class="section-head"><h2>Action needed on open positions</h2><span class="meta">Sell, confirm a fill or raise a stop</span></div>
     ${ex.length ? `<div class="grid">${ex.map(exitCard).join("")}</div>` : `<div class="empty">No open position needs action right now. Every scan re-checks each position against its stop, target, exit signal and time limit.</div>`}</section>
-  <section class="section"><div class="section-head"><h2>New A+ opportunities</h2><span class="meta">${Math.max(0, st.max_open_positions - f.open.length)} of ${esc(st.max_open_positions)} slots free · ${money(f.cash)} cash</span></div>
-    ${feat.length ? `<div class="grid g-tickets">${feat.map(ticket).join("")}</div>` : `<div class="empty"><b>No open A+ setups.</b> ${sc ? `The ${dtPT(sc.started_at)} daily-close scan found none that clear the bar in a ${esc((sc.market?.label || "").toLowerCase())}.` : ""} New setups land right after each daily close, ready to place as limit orders. If a day has none, that is the filter doing its job.</div>`}
-    ${extra.length ? `<details class="panel"><summary>Also qualified (${extra.length}): A+ setups without a free slot or cash today</summary><div class="grid g-tickets" style="margin-top:10px">${extra.map(ticket).join("")}</div></details>` : ""}
+  <section class="section"><div class="section-head"><h2>New A+ opportunities</h2><span class="meta">${feat.length ? `${feat.length} served · ` : ""}${Math.max(0, st.max_open_positions - f.open.length)} of ${esc(st.max_open_positions)} slots free · ${money(f.cash)} cash</span></div>
+    ${held ? `<div class="banner info" style="margin-bottom:12px">All ${feat.length} A+ setups are shown, best first. The account can fund ${feat.length - held} of them right now; the ${held} with a dashed border ${held === 1 ? "is" : "are"} just as valid, so take ${held === 1 ? "it" : "one"} if you skip a higher-ranked setup or a position closes.</div>` : ""}
+    ${feat.length ? `<div class="grid g-tickets">${feat.map(ticket).join("")}</div>` : `<div class="empty"><b>No open A+ setups.</b> ${sc ? `The ${dtPT(sc.started_at)} daily-close scan found none that clear the bar in a ${esc((sc.market?.label || "").toLowerCase())}.` : ""} New setups land right after each daily close, ready to place as limit orders. If a day has none, the radar on the Overview shows what is closest.</div>`}
     ${sc?.watchlist?.length ? `<details class="panel"><summary>Watchlist (${sc.watchlist.length}): grade A setups, not sent as alerts</summary><div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Entry</th><th class="n">Stop</th><th class="n">Target</th><th class="n">R:R</th></tr></thead><tbody>
-      ${sc.watchlist.map((x) => `<tr><td><span class="t">${esc(x.ticker)}</span></td><td class="small">${esc(x.strategy_label)}</td><td class="n">${pct(x.win_pct, 0)}</td><td class="n">${fp(x.entry)}</td><td class="n">${fp(x.stop)}</td><td class="n">${fp(x.target)}</td><td class="n">${esc(x.rr)}</td></tr>`).join("")}</tbody></table></div><p class="small muted">Grade A means 58%+ in this market condition but short of the A+ bar. They are graded on paper so the desk learns whether the bar is in the right place.</p></details>` : ""}
+      ${sc.watchlist.map((x) => `<tr><td><span class="t">${esc(x.ticker)}</span>${tierTag(x)}</td><td class="small">${esc(x.strategy_label)}</td><td class="n">${pct(x.win_pct, 0)}</td><td class="n">${fp(x.entry)}</td><td class="n">${fp(x.stop)}</td><td class="n">${fp(x.target)}</td><td class="n">${esc(x.rr)}</td></tr>`).join("")}</tbody></table></div><p class="small muted">Grade A means 58%+ in this market condition but short of the A+ bar. They are not sent as alerts: when tested as top-ups for slow weeks, setups at this grade lost money.</p></details>` : ""}
   </section>` + positionsSection();
   const recent = S.alerts.filter((a) => a.type === "entry" && !entryLive(a) && !(a.status === "placed" && windowOver(a))).slice(0, 20);
   if (recent.length) h += `<section class="section"><details><summary>Recently handled setups (${recent.length})</summary><div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>Signal</th><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Entry</th><th>Result</th></tr></thead><tbody>
@@ -699,7 +749,7 @@ function viewScans() {
   const st = settings(), sched = st.schedule || [];
   return `<section class="section"><div class="section-head"><h2>Schedule</h2><span class="meta">Crypto trades every day, so the desk runs every day</span></div>
     ${sched.length ? `<div class="tbl-wrap"><table><thead><tr><th>Run</th><th>When</th><th>What it does</th></tr></thead><tbody>${sched.map((s) => `<tr><td><b>${esc(s.name)}</b></td><td class="num" style="white-space:nowrap">${esc(s.when)}</td><td class="small">${esc(s.what)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">The scheduled runs are being set up.</div>`}
-    <div class="small muted">Prices: Coinbase public data, refreshed about every 15 to 60 minutes by a GitHub Action. Daily bars close at 00:00 UTC.</div></section>
+    <div class="small muted">Prices: Coinbase public data, refreshed every 10 minutes around the clock. Daily bars close at 00:00 UTC.</div>${healthPanel()}</section>
   <section class="section"><div class="section-head"><h2>Scan history</h2><span class="meta">Newest first</span></div>
     ${S.scans.length ? S.scans.slice(0, 30).map((sc) => `<details class="panel"><summary>${dtPT(sc.started_at)} · ${sc.mode === "close" ? "Daily-close scan" : "Position check"} · ${esc(sc.headline || "")}</summary>
       <pre class="digest">${esc(sc.digest || "")}</pre><div class="small muted">Prices as of ${dtPT(sc.data?.prices_as_of)} · last daily bar ${esc(sc.data?.last_bar || "–")} · engine ${esc(sc.engine?.fingerprint || "–")} · strategy settings rev ${esc(sc.params_version ?? "–")}</div></details>`).join("") : `<div class="empty">No scans yet.</div>`}</section>`;
@@ -710,22 +760,27 @@ function viewLab() {
   const B = S.backtest, P = S.params;
   if (!B || !P) return `<section class="section"><div class="empty"><b>The first calibration is still being saved.</b> Backtests, the market-condition map and the research log appear here.</div></section>`;
   const G = B.grading || {}, ap = G.aplus || {}, hc = G.honest_check || {}, rep = G.account_replay || {}, cond = latestScan(true)?.market?.condition;
-  const paused = S.learning.adjust?.paused || {}, strat = B.strategies || {}, T = P.grade_table || {};
+  const paused = S.learning.adjust?.paused || {}, strat = B.strategies || {}, T = P.grade_table || {}, TW = P.grade_table_wide || {}, hw = G.honest_check_wide || {}, U = B.universe || {}, PA = B.pace || {};
   const ids = Object.keys(strat).sort((a, b) => (strat[b].enabled - strat[a].enabled) || ((strat[b].oos?.win_rate || 0) - (strat[a].oos?.win_rate || 0)));
-  const cell = (sid, c) => { const x = T[sid]?.[c], on = strat[sid]?.enabled && (!(P.strategies?.[sid]?.market_conditions || []).length || P.strategies[sid].market_conditions.includes(c));
-    if (!x || !on) return `<td class="c off ${c === cond ? "today" : ""}">${x && x.n ? `<span title="not traded here">${Math.round(100 * x.p)}%</span>` : "–"}</td>`;
-    return `<td class="c ${x.grade === "A+" ? "ap" : x.grade === "A" ? "a" : ""} ${c === cond ? "today" : ""}">${Math.round(100 * x.p)}% <span class="small">${esc(x.grade)}</span><div class="small muted">${x.n} trades${x.live_n ? ` +${x.live_n} live` : ""}</div></td>`; };
+  const cell = (sid, c) => { const x = T[sid]?.[c], xw = TW[sid]?.[c], on = strat[sid]?.enabled && (!(P.strategies?.[sid]?.market_conditions || []).length || P.strategies[sid].market_conditions.includes(c));
+    const top = [x?.grade, xw?.grade].includes("A+") ? "ap" : [x?.grade, xw?.grade].includes("A") ? "a" : "";
+    const line = (y, name) => (y && y.n && y.p != null ? `<div class="${y.grade === "A+" ? "" : "dim"}">${name} ${Math.round(100 * y.p)}% <span class="small">${esc(y.grade)}</span> <span class="small muted">${y.n}${y.live_n ? `+${y.live_n} live` : ""}</span></div>` : "");
+    if ((!x || !x.n) && (!xw || !xw.n)) return `<td class="c off ${c === cond ? "today" : ""}">–</td>`;
+    if (!on) return `<td class="c off ${c === cond ? "today" : ""}"><span title="not traded here">${x?.n && x.p != null ? Math.round(100 * x.p) + "%" : "–"}</span></td>`;
+    return `<td class="c ${top} ${c === cond ? "today" : ""}">${line(x, "core")}${line(xw, "wider")}</td>`; };
   let h = `<section class="section"><div class="section-head"><h2>How the desk decides</h2><span class="meta">Calibrated ${dtPT(P.calibrated_at)} on prices through ${esc(P.data_through)} · settings rev ${esc(P.rev)}</span></div>
     <div class="panel"><dl class="kv">
-      <dt>Data</dt><dd>${esc(B.data?.pairs)} Coinbase USD pairs since ${esc(B.data?.first_bar)}, ${esc(B.data?.liquid_today)} liquid enough to trade today. Coins that were delisted stay in the history.</dd>
+      <dt>Data</dt><dd>${esc(B.data?.pairs)} Coinbase USD pairs since ${esc(B.data?.first_bar)}, ${esc(B.data?.liquid_today)} scanned today${B.data?.core_today != null ? ` (${esc(B.data.core_today)} core, ${esc(B.data.liquid_today - B.data.core_today)} wider list)` : ""}. Coins that were delisted stay in the history, and a trade open when a coin stopped trading is closed at its last price.</dd>
+      ${U.rule ? `<dt>Coin list</dt><dd>${esc(U.rule)}</dd>` : ""}
       <dt>Honest testing</dt><dd>Each strategy's settings are chosen on prices before ${esc(B.split)} only, then judged once on everything after (unseen data).</dd>
-      <dt>Costs</dt><dd>Every result is after fees: ${esc(B.costs?.maker_pct)}% on limit orders, ${esc(B.costs?.taker_pct)}% plus ${esc(B.costs?.slippage_pct)}% slippage on stops and market exits. A limit only counts as filled when price trades below it.</dd>
+      <dt>Costs</dt><dd>Every result is after fees: ${esc(B.costs?.maker_pct)}% on limit orders, ${esc(B.costs?.taker_pct)}% plus ${esc(B.costs?.slippage_pct)}% slippage on stops and market exits. A limit only counts as filled when price trades below it.${B.costs?.wide_slippage_pct ? ` Wider-list coins are tested harder: price must trade ${esc(B.costs.wide_fill_margin_pct)}% through the limit to count as a fill, and exits slip ${esc(B.costs.wide_slippage_pct)}%.` : ""}</dd>
       <dt>A+ rule</dt><dd>${esc(G.rule || "")}</dd>
       <dt>Market conditions</dt><dd>${esc(B.condition_rule || "")} Share of days since ${esc(B.data?.first_bar?.slice(0, 4))}: ${COND_ORDER.map((c) => `${COND[c]} ${pct(100 * (B.condition_share?.[c] || 0), 0)}`).join(" · ")}.</dd></dl></div>
     <div class="grid g-kpi">
       ${kpi("A+ setups, all history", ap.trades ? pct(100 * ap.win_rate) : "–", ap.trades ? `${ap.trades} trades · avg ${spct(100 * ap.avg_ret, 2)} · PF ${esc(ap.profit_factor)}` : "No A+ trades in the backtest")}
       ${kpi("A+ by signal day", ap.signal_days ? pct(100 * ap.day_win_rate) : "–", ap.signal_days ? `${ap.signal_days} separate days (same-day setups move together)` : "")}
-      ${kpi("Honesty check", hc.trades ? pct(100 * hc.win_rate) : "–", hc.trades ? `${hc.trades} unseen trades in cells picked from training only` : "Too few unseen trades to measure")}
+      ${kpi("Honesty check, core", hc.trades ? pct(100 * hc.win_rate) : "–", hc.trades ? `${hc.trades} unseen trades in cells picked from training only` : "Too few unseen trades to measure")}
+      ${kpi("Honesty check, wider list", hw.trades ? pct(100 * hw.win_rate) : "–", hw.trades ? `${hw.trades} trades since 2025 in cells picked from earlier years · ${hw.signal_days} days` : "Too few trades to measure")}
       ${kpi("$1,500 replay, unseen years", rep.unseen_only?.trades ? money(rep.unseen_only.end_capital, 0) : "–", rep.unseen_only?.trades ? `${spct(100 * rep.unseen_only.cagr)} a year · worst drop ${pct(100 * rep.unseen_only.max_dd)} · ${rep.unseen_only.per_year} trades a year` : "")}
       ${kpi("$1,500 replay, all history", rep.full_history?.trades ? money(rep.full_history.end_capital, 0) : "–", rep.full_history?.trades ? `${spct(100 * rep.full_history.cagr)} a year · worst drop ${pct(100 * rep.full_history.max_dd)}` : "")}
     </div>
@@ -734,6 +789,23 @@ function viewLab() {
       <tr><td>Growth a year, all history</td>${G.sizing.map((z) => `<td class="n">${spct(100 * z.full_history.cagr)}</td>`).join("")}</tr><tr><td>Worst drop, all history</td>${G.sizing.map((z) => `<td class="n">${pct(100 * z.full_history.max_dd)}</td>`).join("")}</tr>
       <tr><td>Trades a year</td>${G.sizing.map((z) => `<td class="n">${esc(z.full_history.per_year)}</td>`).join("")}</tr></tbody></table></div>
       <p class="small muted">Replay of a $1,500 account taking the best-scoring A+ setups, ${esc(P.risk?.max_open_positions)} at a time. Crypto stops sit 20 to 40% away in a selloff, so sizing by risk keeps each position small: more risk per trade grows the account faster and deepens the drops. Change it under Funds, Desk settings.</p>` : ""}
+    ${(G.slots || []).length ? `<div class="tbl-wrap"><table><thead><tr><th>Positions held at once (your setting: ${esc(settings().max_open_positions)})</th>${G.slots.map((z) => `<th class="n">${esc(z.slots)}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Growth a year, unseen years</td>${G.slots.map((z) => `<td class="n">${spct(100 * z.cagr)}</td>`).join("")}</tr><tr><td>Worst drop</td>${G.slots.map((z) => `<td class="n">${pct(100 * z.max_dd)}</td>`).join("")}</tr>
+      <tr><td>Win rate</td>${G.slots.map((z) => `<td class="n">${pct(100 * z.win_rate, 0)}</td>`).join("")}</tr><tr><td>Trades a year</td>${G.slots.map((z) => `<td class="n">${esc(z.per_year)}</td>`).join("")}</tr></tbody></table></div>
+      <p class="small muted">A+ setups arrive in bursts on selloff days, so more slots let the account take more of them: growth and the worst drop both rise, the win rate barely moves. The replay wins less often than the per-trade record because one account cannot take every setup on a burst day.</p>` : ""}
+    ${(G.confluence || []).length > 1 ? `<div class="tbl-wrap"><table><thead><tr><th>A+ strategies that flag the same coin on the same day (unseen years)</th>${G.confluence.map((z) => `<th class="n">${esc(z.agree)}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Win rate</td>${G.confluence.map((z) => `<td class="n">${pct(100 * z.win_rate, 0)}</td>`).join("")}</tr><tr><td>Average trade</td>${G.confluence.map((z) => `<td class="n">${spct(100 * z.avg_ret)}</td>`).join("")}</tr>
+      <tr><td>Trades · separate days</td>${G.confluence.map((z) => `<td class="n">${esc(z.trades)} · ${esc(z.days)}</td>`).join("")}</tr></tbody></table></div><p class="small muted">Agreement is the strongest ranking signal the desk has measured, so setups confirmed by several strategies are ranked, and funded, first.</p>` : ""}
+    ${U.probe?.note ? `<div class="banner info" style="margin-bottom:12px"><b>Coin-list check:</b> ${esc(U.probe.note)}</div>` : ""}
+    ${(U.bands || []).length ? `<div class="tbl-wrap"><table><thead><tr><th>A+ setups by how much the coin trades a day (unseen years)</th>${U.bands.map((z) => `<th class="n">${esc(z.band)}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Win rate</td>${U.bands.map((z) => `<td class="n">${pct(100 * z.win_rate, 0)}</td>`).join("")}</tr><tr><td>Average trade</td>${U.bands.map((z) => `<td class="n">${spct(100 * z.avg_ret)}</td>`).join("")}</tr>
+      <tr><td>Trades · separate days</td>${U.bands.map((z) => `<td class="n">${esc(z.trades)} · ${esc(z.days)}</td>`).join("")}</tr></tbody></table></div>` : ""}
+    ${PA.aplus_only ? `<div class="tbl-wrap"><table><thead><tr><th>Weekly pace from A+ setups alone (minimum ${esc(PA.aplus_only.min_week)} a week)</th><th class="n">Since ${esc(String(PA.aplus_only.since).slice(0, 4))}</th><th class="n">Last 52 weeks</th></tr></thead><tbody>
+      <tr><td>Setups a week, average</td><td class="n">${esc(PA.aplus_only.per_week)}</td><td class="n">${esc(PA.last_52_weeks?.per_week ?? "–")}</td></tr>
+      <tr><td>Weeks with at least one</td><td class="n">${pct(100 * PA.aplus_only.weeks_with_any, 0)}</td><td class="n">${PA.last_52_weeks ? pct(100 * PA.last_52_weeks.weeks_with_any, 0) : "–"}</td></tr>
+      <tr><td>Weeks that reached the minimum</td><td class="n">${pct(100 * PA.aplus_only.weeks_at_min, 0)}</td><td class="n">${PA.last_52_weeks ? pct(100 * PA.last_52_weeks.weeks_at_min, 0) : "–"}</td></tr>
+      <tr><td>Days with a setup</td><td class="n">${pct(PA.aplus_only.days_with_setups_pct, 0)}</td><td class="n">${PA.last_52_weeks ? pct(PA.last_52_weeks.days_with_setups_pct, 0) : "–"}</td></tr></tbody></table></div>
+      <p class="small muted">A+ setups come in bursts: many on selloff days, none in quiet stretches. ${esc(PA.topup?.note || "")} Closing the quiet weeks with genuine A+ setups is the standing research target.</p>` : ""}
     ${ap.by_year && Object.keys(ap.by_year).length ? `<div class="tbl-wrap"><table><thead><tr><th>A+ setups by year</th>${Object.keys(ap.by_year).map((y) => `<th class="n">${esc(y)}</th>`).join("")}</tr></thead><tbody>
       <tr><td>Win rate</td>${Object.values(ap.by_year).map((v) => `<td class="n">${pct(100 * v.win_rate, 0)}</td>`).join("")}</tr><tr><td>Trades</td>${Object.values(ap.by_year).map((v) => `<td class="n">${v.trades}</td>`).join("")}</tr>
       <tr><td>Average trade</td>${Object.values(ap.by_year).map((v) => `<td class="n">${spct(100 * v.avg_ret)}</td>`).join("")}</tr></tbody></table></div><p class="small muted">Backtests flatter: results cluster in a few strong stretches, vary a lot by year, and real fills are never as clean. The account replay sizes like the live desk, but the past is not a promise.</p>` : ""}
@@ -742,8 +814,9 @@ function viewLab() {
     <div class="tbl-wrap"><table class="heat"><thead><tr><th>Strategy</th>${COND_ORDER.map((c) => `<th class="${c === cond ? "today" : ""}" style="text-align:center">${COND[c]}</th>`).join("")}<th>Status</th></tr></thead><tbody>
       ${ids.map((sid) => `<tr><td><b>${esc(strat[sid].label)}</b><div class="small muted">${esc(strat[sid].family || "")}</div></td>${COND_ORDER.map((c) => cell(sid, c)).join("")}
         <td>${paused[sid] ? pill("warn", "Paused") : strat[sid].enabled ? pill("good", strat[sid].mode === "specialist" ? "Specialist" : "Active") : pill("neutral", "Off")}</td></tr>`).join("")}</tbody></table></div>
-    <p class="small muted">Gold = A+ (alerts are sent). Blue = grade A (watchlist only). Grey = the strategy does not trade in that condition. A strategy with gold in every column would be all-weather; the daily research looks for setups that fill the empty columns.</p></section>
-  <section class="section"><div class="section-head"><h2>Strategies</h2><span class="meta">${ids.filter((s) => strat[s].enabled).length} active of ${ids.length}</span></div><div class="grid g-2">${ids.map((sid) => stratCard(sid, strat[sid], paused[sid])).join("")}</div></section>`;
+    <p class="small muted">Gold = A+ on the core list, the wider list or both (alerts are sent for the tier marked A+). Blue = grade A (watchlist only). Grey = the strategy does not trade in that condition. The small number is the trade count behind the estimate. A strategy with gold in every column would be all-weather; the daily research looks for setups that fill the empty columns.</p></section>
+  <section class="section"><div class="section-head"><h2>Strategies</h2><span class="meta">${ids.filter((s) => strat[s].enabled).length} active of ${ids.length}</span></div><div class="grid g-2">${ids.map((sid) => stratCard(sid, strat[sid], paused[sid])).join("")}</div>
+    ${Object.keys(P.retired || {}).length ? `<div class="panel"><h3>Retired</h3>${Object.entries(P.retired).map(([k, why]) => `<div class="lesson"><b>${esc(S.research.find((r) => r.id === k)?.label || k)}</b><div class="small muted">${esc(why)}</div></div>`).join("")}</div>` : ""}</section>`;
   h += learningSection() + researchSection() + lessonsSection() + journalSection();
   return h;
 }
@@ -769,9 +842,9 @@ function learningSection() {
 }
 function researchSection() {
   const R = [...S.research].sort((a, b) => String(b.tested_at).localeCompare(String(a.tested_at)));
-  const tone = { candidate: "good", watch: "info", redundant: "neutral", rejected: "neutral" };
+  const tone = { candidate: "good", watch: "info", redundant: "neutral", rejected: "neutral", superseded: "warn" };
   return `<section class="section"><div class="section-head"><h2>Research log</h2><span class="meta">${R.length} idea${R.length === 1 ? "" : "s"} tested · new ones every day, including the desk's own designs</span></div>
-    ${R.length ? `<div class="grid g-research">${R.map((r) => `<div class="panel idea"><div class="row"><h3>${esc(r.label || r.id)}</h3>${pill(tone[r.verdict] || "neutral", r.verdict)}${r.own_design ? `<span class="tag">Own design</span>` : ""}${S.params?.custom?.[r.id] ? `<span class="tag">Live</span>` : ""}</div>
+    ${R.length ? `<div class="grid g-research">${R.map((r) => `<div class="panel idea"><div class="row"><h3>${esc(r.label || r.id)}</h3>${pill(tone[r.verdict] || "neutral", r.verdict)}${r.own_design ? `<span class="tag">Own design</span>` : ""}${S.params?.custom?.[r.id] && !S.params?.retired?.[r.id] ? `<span class="tag">Live</span>` : ""}${S.params?.retired?.[r.id] ? `<span class="tag">Retired</span>` : ""}</div>
       <div class="small">${esc(r.about || r.spec?.about || "")}</div><div class="small muted">${esc(r.summary || "")}</div><div class="small muted">${esc(r.family || "")} · tested ${dPT(r.tested_at)}</div></div>`).join("")}</div>`
       : `<div class="empty">The daily learning run tests its first ideas after the next daily close: a backlog of ten is queued, and at least one new own design is added every day.</div>`}</section>`;
 }
@@ -785,6 +858,8 @@ function journalSection() {
     ${S.journal.length ? S.journal.slice(0, 30).map((j, i) => `<details class="panel" ${i === 0 ? "open" : ""}><summary>${dPT(j.date)} · ${esc(j.market_label || "")}${j.changes?.length ? " · " + j.changes.length + " change" + (j.changes.length === 1 ? "" : "s") : ""}</summary>
       <div class="idea" style="margin-top:8px">${j.notes ? `<div>${esc(j.notes)}</div>` : ""}
       ${(j.insights || []).length ? `<ul class="steps">${j.insights.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${(j.opportunities || []).length ? `<div><b>What could be better:</b><ul class="steps">${j.opportunities.map((x) => `<li><span class="tag">${esc(x.area)}</span> ${esc(x.text)}</li>`).join("")}</ul></div>` : ""}
+      ${j.improvement ? `<div><b>Improvement of the day:</b> ${esc(j.improvement)}</div>` : ""}
       ${(j.changes || []).length ? `<div><b>Changes:</b> ${j.changes.map(esc).join(" ")}</div>` : ""}
       ${(j.research || []).length ? `<div><b>Research:</b><ul class="steps">${j.research.map((x) => `<li>${esc(typeof x === "string" ? x : `${x.label || x.id}: ${x.verdict}. ${x.summary || ""}`)}</li>`).join("")}</ul></div>` : ""}
       ${j.promotion ? `<div><b>Promotion check:</b> ${esc(j.promotion)}</div>` : ""}

@@ -15,7 +15,7 @@ scheduled tasks. Nothing here reads or writes anything of the stocks desk.
 
 | Piece | Where | What it does |
 |---|---|---|
-| Price feed | `.github/workflows/crypto-data.yml`, `pipeline/` | GitHub Action, asked every 15 minutes around the clock (GitHub lets about one an hour through at worst). Coinbase Exchange public API, no keys: daily bars since 2017 for every USD pair (delisted ones included), hourly bars for the tradable ones, the Fear & Greed index. Publishes the `data` branch as one squashed commit. Sunday: full history rebuild. |
+| Price feed | `.github/workflows/crypto-data.yml`, `crypto-watchdog.yml`, `pipeline/` | A GitHub Action that loops around the clock: one pass every 10 minutes for about 5.5 hours, then the run starts its successor (GitHub's own schedule proved far too sparse: 3 runs in 7 hours). `crypto-watchdog` checks every 15 minutes that the feed is fresh and restarts the loop if it stopped. Coinbase Exchange public API, no keys. `daily.csv.gz` holds finished daily bars for every USD pair incl. delisted ones (rewritten once a day), `recent.csv.gz` the last days incl. the forming bar (every pass), `hourly.csv.gz` ~200 hours for every coin the desk may scan, `universe.json` status, liquidity tier and order increments. |
 | Engine | `engine/` | Indicators, strategies as JSON rule specs, a fee-aware backtester, calibration and grading by market condition, the scanner, the position monitor, the daily learning review, strategy research and the lessons registry. |
 | Scheduled runs | Claude scheduled tasks (`ops/schedule.json`, prompts in `ops/generated/`) | Daily-close scan (00:20 UTC), two position checks a day, the daily learning review + research, the Sunday recalibration, and Scan now from the dashboard. Each reads the engine copy published with the dashboard, clones the `data` branch, exports the dashboard state, runs the engine, writes the results and sends a phone alert. |
 | Dashboard | Claude artifact (`dashboard/`) | Overview, Alerts (order tickets with countdowns, open positions with what to do now), Trade log, Funds and settings, Scans, Strategy lab (backtests, the market-condition map, research log, lessons, daily journal). |
@@ -58,3 +58,19 @@ New ideas are plain JSON rule specs; `engine/rules.py` documents the format.
 1. `python3 ops/publish_engine.py` prints the files to publish with the dashboard (the engine copy the
    scheduled runs read) and rewrites `ops/engine_manifest.json`. Republish the dashboard with them.
 2. After editing a prompt in `ops/build_prompts.py`, run it and update the scheduled task with the generated file.
+
+
+## What the 2026-11-16 audit changed (and the test that keeps each fix in place)
+
+`python3 tests/test_regressions.py` holds one test per fault found.
+
+- **Coin list**: from 32 coins ($2M+ a day) to every normally trading Coinbase USD pair above $150K a day (143 on the day of the audit): a core tier ($2M+) and a wider tier graded on its own record with harsher fills and slippage. The list is rebuilt from fresh volumes at every scan; the weekly calibration re-tests the floor (`calibrate.floor_probe`) and moves it one step when the evidence says so.
+- **No cap**: every A+ setup is served as a full ticket. What the account cannot fund is still shown, marked, in rank order.
+- **Ranking**: when several A+ strategies flag the same coin on the same day it ranks first (72% wins alone, 87% with two, 91% with three or more on unseen data).
+- **Grading**: an A+ cell must also win on most of its signal days (same-day setups move together).
+- **Radar and pace**: each close scan lists coins one condition short of an A+ signal, the market conditions strategies wait on, and the week's A+ count against the minimum of 5.
+- **Reliability**: feed loop + watchdog; a check run catches up on new setups when the close scan was missed, prices were late or the strategy book changed; the daily review and the dashboard list every scheduled run that did not happen.
+- **Fixed faults**: target hits read from the fill day's high on daily bars; order sizes not floored to the exchange's step; backtest trades dropped when a coin was delisted; the journal filed under the run date instead of the trading day; calibration ignoring the account's real fee settings.
+- **Tested and rejected** (kept in the research log so nobody repeats them): top-ups from grade-A setups (won 43 to 45%), flushes of a coin falling alone, resting deep bids, range lows, streak and rebound-confirmation entries in quiet markets.
+
+A push that touches `pipeline/` restarts the feed loop with the new code within about ten minutes.
