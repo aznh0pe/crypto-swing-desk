@@ -499,6 +499,7 @@ def main():
     retired = {**(shipped.get("retired") or {}), **(sp.get("retired") or {})}
     custom = {**(shipped.get("custom") or {}), **(sp.get("custom") or {})}   # promoted strategies are never lost...
     sp = {**sp, "custom": {k: v for k, v in custom.items() if k not in retired}, "retired": retired}   # ...and retired ones never return
+    extra = [e for e in extra if e["id"] not in retired]
     if a.state:   # backtests use the fees the account really pays (Funds, Desk settings)
         s_ = st.get("settings") or {}
         if s_.get("maker_fee_pct") is not None and s_.get("taker_fee_pct") is not None:

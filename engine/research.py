@@ -199,7 +199,8 @@ def cmd_promote(data_dir, state_dir, out_dir) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     st = load_state(state_dir)
     P = S.load_params(st["params"])
-    cands = [r for r in st["research"].values() if r.get("verdict") == "candidate" and r.get("spec") and r["id"] not in (P.get("custom") or {})]
+    cands = [r for r in st["research"].values() if r.get("verdict") == "candidate" and r.get("spec") and r["id"] not in (P.get("custom") or {})
+             and r["id"] not in (P.get("retired") or {})]        # a retired strategy never comes back through the side door
     if not cands:
         res = {"promoted": [], "note": "No new candidate waiting for promotion."}
         print(json.dumps(res))

@@ -17,6 +17,20 @@ def main():
     assert P["strategies"] and "grade_table" in P
     (w / "state" / "strategy").mkdir(parents=True)
     shutil.copy(w / "bt" / "params.json", w / "state" / "strategy" / "params.json")
+    # a retired strategy never returns, even when the research log still lists it as a candidate
+    shipped = json.loads((ROOT / "engine" / "params.json").read_text())
+    for rid, why in (shipped.get("retired") or {}).items():
+        (w / "state" / "research").mkdir(parents=True, exist_ok=True)
+        spec = {"id": rid, "label": rid, "family": "t", "about": "t", "universe": "all", "conditions": ["rsi2 < 15"], "entry": {"kind": "limit_next", "price": "close - 0.5*atr10"},
+                "stop": {"atr": 2.5}, "target": {"atr": 2.5}, "exit": "sma5", "max_hold": 6, "valid_days": 1, "params": {}, "grid": {}}
+        (w / "state" / "research" / f"{rid}.json").write_text(json.dumps({"id": rid, "verdict": "candidate", "spec": spec}))
+    if shipped.get("retired"):
+        run("engine.calibrate", "backtest", "--data", str(w / "data"), "--state", str(w / "state"), "--out", str(w / "bt2"))
+        P2 = json.loads((w / "bt2" / "params.json").read_text())
+        assert not (set(shipped["retired"]) & (set(P2["strategies"]) | set(P2.get("custom") or {}))), "a retired strategy came back"
+        assert set(shipped["retired"]) <= set(P2.get("retired") or {})
+        run("engine.research", "promote", "--data", str(w / "data"), "--state", str(w / "state"), "--out", str(w / "pr"))
+        assert not (w / "pr" / "writes.json").exists() or not (set(shipped["retired"]) & set(json.loads((w / "pr" / "docs" / "strategy" / "params.json").read_text()).get("custom") or {}))
     out = json.loads(run("engine.scan", "run", "--mode", "close", "--data", str(w / "data"), "--state", str(w / "state"), "--out", str(w / "scan")))
     assert out["status"] in ("ok", "partial")
     for wr in json.loads((w / "scan" / "writes.json").read_text()):
