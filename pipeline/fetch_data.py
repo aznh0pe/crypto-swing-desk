@@ -74,6 +74,25 @@ def candles(product: str, gran: int, start: dt.datetime, end: dt.datetime) -> li
     return sorted({r[0]: r for r in out if isinstance(r, list) and len(r) >= 6}.values())
 
 
+def backfill(product: str, gran: int, start: dt.datetime, end: dt.datetime) -> list:
+    """Full history, newest window first, stopping once two windows in a row come back empty after data was
+    seen (the coin was not listed yet). Saves thousands of empty calls on a full rebuild."""
+    out, step, b, empty = [], dt.timedelta(seconds=gran * 300), end, 0
+    while b > start:
+        a = max(b - step, start)
+        rows = get(f"/products/{product}/candles?granularity={gran}&start={a.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                   f"&end={b.strftime('%Y-%m-%dT%H:%M:%SZ')}")
+        if rows:
+            out.extend(rows)
+            empty = 0
+        else:
+            empty += 1
+            if empty >= 2:
+                break
+        b = a
+    return sorted({r[0]: r for r in out if isinstance(r, list) and len(r) >= 6}.values())
+
+
 def frame(rows: list, ticker: str, col: str) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=[col, "ticker", "open", "high", "low", "close", "volume"])
@@ -115,7 +134,7 @@ def main(mode: str = "auto"):
         tk, pid = p["base_currency"], p["id"]
         try:
             if full or tk not in have:
-                rows = candles(pid, 86400, START, now)
+                rows = backfill(pid, 86400, START, now)
             else:  # top up the last 300 days (covers any gap since the last run and late revisions)
                 rows = candles(pid, 86400, now - dt.timedelta(days=299), now)
             parts.append(frame(rows, tk, "date"))
