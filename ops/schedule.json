@@ -1,0 +1,9 @@
+{
+ "about": "Every scheduled task of the Crypto Swing Desk. Cron times are UTC, so the runs stay aligned with the 00:00 UTC daily close all year (Pacific times shift an hour in summer). After changing a prompt in ops/build_prompts.py, run it and update the task with the generated file.",
+ "dashboard": "https://claude.ai/artifact/WegWWtq9MtYa7uVz3FLiH3",
+ "tasks": {
+  "scan": {"id": "trig_01Ep68rdKc8UqGnPGLMPKNzU", "cron_utc": "20 0,13,19 * * *", "pacific_winter": "4:20 PM (daily close), 5:20 AM, 11:20 AM", "prompt": "ops/generated/scan.md", "notify": "push", "also": "the dashboard's Scan now button fires this task"},
+  "learning": {"id": "trig_01VmbbGRffU136QgLadHyxzB", "cron_utc": "25 1 * * *", "pacific_winter": "5:25 PM", "prompt": "ops/generated/learning.md", "notify": "push on problems only"},
+  "weekly": {"id": "trig_01HJEqLNJWYVW7kUmx2oaHpw", "cron_utc": "17 18 * * 0", "pacific_winter": "Sunday 10:17 AM", "prompt": "ops/generated/weekly.md", "notify": "push on problems only"}
+ }
+}
