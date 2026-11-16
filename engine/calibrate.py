@@ -256,9 +256,12 @@ def main():
         st = load_state(a.state)
         sp = st.get("params")
         extra = [r["spec"] for r in st.get("research", {}).values() if r.get("verdict") == "candidate" and r.get("spec")]
-    if not (sp and sp.get("strategies")):   # nothing saved yet: start from the settings shipped with the engine (they carry the promoted strategies)
-        f = S.HERE / "params.json"
-        sp = json.loads(f.read_text()) if f.exists() else sp
+    f = S.HERE / "params.json"
+    shipped = json.loads(f.read_text()) if f.exists() else {}
+    if not (sp and sp.get("strategies")):   # nothing saved yet: start from the settings shipped with the engine
+        sp = shipped
+    if shipped.get("custom"):               # strategies promoted before this engine copy was published are never lost
+        sp = {**sp, "custom": {**shipped["custom"], **(sp.get("custom") or {})}}
     P, report = run_backtest(a.data, sp, extra)
     for sid in [e["id"] for e in extra]:
         if P["strategies"].get(sid, {}).get("enabled"):

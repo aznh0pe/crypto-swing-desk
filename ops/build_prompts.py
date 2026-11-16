@@ -31,23 +31,19 @@ If the engine can't run (setup 1a and 1b both unavailable or refused): still fin
 If the prices cannot be fetched at all: same as above, and write a scan document saying so (ArtifactData "set", collection scans, doc_id like 20261116-0020-close, fields id, mode, started_at as UTC ISO time, status "failed", headline, digest, errors)."""
 
 
-def scan_prompt(mode: str) -> str:
-    if mode == "close":
-        title = "Run the Crypto Swing Desk daily-close scan for me now"
-        fresh = ("2. Data freshness: read $W/data/meta.json. The daily bar that just finished is yesterday's UTC date. If meta.json's last_daily_bar is not that date, or its generated_utc is before 00:03 UTC today, the feed has not refreshed since the close: re-clone the data branch every 5 minutes for up to 30 minutes until it has (use the Monitor tool or a background Bash loop to wait; don't chain sleeps). If it still hasn't, run anyway: the engine refuses to build setups from stale bars and says so.")
-        run = "4. Run `cd $C && python3 -m engine.scan run --mode close --data $W/data --state $W/state --out $W/out`. If it prints \"failed\" or Python errors, read $W/out/failure.json, fix the cause in your local copy (data format, a missing column, an edge case), and run again, up to 3 fix attempts. Add any fix to ISSUES."
-        news = "5. " + NEWS
-    elif mode == "check":
-        title = "Run the Crypto Swing Desk position check for me now"
-        fresh = "2. Data freshness: read $W/data/meta.json. If generated_utc is more than 3 hours old, re-clone once after 5 minutes; if it is still that old, run anyway (the digest says prices are behind) and add a sentence to ISSUES."
-        run = "4. Run `cd $C && python3 -m engine.scan run --mode check --data $W/data --state $W/state --out $W/out` (open positions, resting orders and live prices only; new setups come from the daily-close scan). If it prints \"failed\" or Python errors, read $W/out/failure.json, fix the cause in your local copy and run again, up to 3 fix attempts. Add any fix to ISSUES."
-        news = "5. No news check in this run, unless a position's status is anything other than HOLD: then run one WebSearch \"<TICKER> crypto news\" for that coin and, if something coin-specific and material turned up, add one sentence about it to ISSUES-style notes with `--issue \"News on <TICKER>: ...\"` (see Run problems below) so it shows with the status."
-    else:
-        title = "Run a Crypto Swing Desk scan for me now (I pressed Scan now on the dashboard)"
-        fresh = "2. Data freshness: read $W/data/meta.json and note generated_utc and last_daily_bar. Run with what is there."
-        run = ("4. Pick the mode: look at the newest scans you exported. If none of them has mode \"close\" and signal_date equal to meta.json's last_daily_bar, today's setups have not been built yet: use --mode close. Otherwise use --mode check. Run `cd $C && python3 -m engine.scan run --mode <mode> --data $W/data --state $W/state --out $W/out`. If it prints \"failed\" or Python errors, read $W/out/failure.json, fix the cause in your local copy and run again, up to 3 fix attempts. Add any fix to ISSUES.")
-        news = "5. " + NEWS
-    return "\n".join([f"{title}. Work unattended: don't ask me anything, decide and keep going.", "", CONTEXT, "", "Steps", SETUP, fresh, "3. " + EXPORT_SCAN, run, news, "6. " + WRITE, TAIL, ""])
+def scan_prompt() -> str:
+    """One prompt for every scan: the run right after the daily close builds the new setups, the others check
+    positions and orders. The dashboard's Scan now button fires the same task."""
+    title = "Run a Crypto Swing Desk scan for me now"
+    fresh = ("2. Data freshness: read $W/data/meta.json and note generated_utc and last_daily_bar. The newest finished daily bar is yesterday's UTC date. "
+             "If the UTC time now is between 00:00 and 01:30 and last_daily_bar is not yesterday's UTC date, or generated_utc is before 00:03 UTC today, the feed has not refreshed since the close: "
+             "re-clone the data branch every 5 minutes for up to 30 minutes until it has (use the Monitor tool or a background Bash loop to wait; don't chain sleeps). "
+             "At any other time, if generated_utc is more than 3 hours old, re-clone once after 5 minutes. Then run with what is there: the engine refuses to build setups from stale bars and says so in the digest. Add a sentence to ISSUES if the feed stayed behind.")
+    run = ("4. Pick the mode: look at the scans you exported. If none of them has mode \"close\" and signal_date equal to meta.json's last_daily_bar, today's setups have not been built yet: use --mode close. "
+           "Otherwise use --mode check (open positions, resting orders and live prices only). Run `cd $C && python3 -m engine.scan run --mode <mode> --data $W/data --state $W/state --out $W/out`. "
+           "If it prints \"failed\" or Python errors, read $W/out/failure.json, fix the cause in your local copy (data format, a missing column, an edge case) and run again, up to 3 fix attempts. Add any fix to ISSUES.")
+    return "\n".join([f"{title}. Work unattended: don't ask me anything, decide and keep going. This task runs three times a day (right after the daily close at 00:20 UTC, and at 13:20 and 19:20 UTC) and whenever I press Scan now on the dashboard.",
+                      "", CONTEXT, "", "Steps", SETUP, fresh, "3. " + EXPORT_SCAN, run, "5. " + NEWS, "6. " + WRITE, TAIL, ""])
 
 
 LEARN = f"""Run the Crypto Swing Desk daily learning review and strategy research for me now. Work unattended: don't ask me anything.
@@ -86,9 +82,9 @@ Steps
 {SETUP}
 2. Export state with out_dir "$W/state" on {ART}: ArtifactData "list" with query.limit 1000 for collections strategy, config, learning and research. Note the versions of strategy/params and strategy/backtest. The engine reads $W/state/<collection>/<doc id>.json; check the files landed that way and move them into that shape if not.
 3. Run `cd $C && python3 -m engine.calibrate backtest --data $W/data --state $W/state --out $W/out` (a few minutes). It re-searches every strategy's small parameter grid on the training years, judges each on unseen data after fees, re-tests the strategies that are off and every research candidate, rebuilds the win-odds table per market condition and the A+ results by year, and replays a $1,500 account. If it errors, fix the cause in the local copy and re-run (up to 3 attempts).
-4. Compare $W/out/params.json with the exported strategy/params: list each strategy that switched on or off, each change of parameters or market conditions, and each market-condition cell that gained or lost its A+ grade. Read $W/out/backtest_report.json "grading": the A+ win rate (all history, by signal day, and the "honest_check" on unseen data) and the account replay.
-5. Write: ArtifactData "batch" with the two writes in $W/out/writes.json (strategy/params and strategy/backtest), pinned with if_version to the versions from step 2 when the documents exist. If the batch is refused because a version changed, export strategy again, re-run step 3 once and write again. Confirm with ArtifactData "get" strategy/params (out_dir "$W/check") that its "calibrated_at" is today's.
-6. Pauses: read the exported learning/adjust. For each strategy in its "paused" list that the new calibration still has switched on, leave the pause (the daily review lifts it when the strategy's graded alerts recover); for each paused strategy the calibration has switched off, remove it from "paused" and write learning/adjust back (ArtifactData "set", pinned to its version).
+4. Compare $W/out/params.json with the exported strategy/params (if there is none yet, this is the first calibration: say so and skip the comparison): list each strategy that switched on or off, each change of parameters or market conditions, and each market-condition cell that gained or lost its A+ grade. Read $W/out/backtest_report.json "grading": the A+ win rate (all history, by signal day, and the "honest_check" on unseen data) and the account replay.
+5. Write: ArtifactData "batch" with the two writes in $W/out/writes.json (strategy/params and strategy/backtest), pinned with if_version to the versions from step 2 when the documents exist (no if_version when they don't). If the batch is refused because a version changed, export strategy again, re-run step 3 once and write again. Confirm with ArtifactData "get" strategy/params (out_dir "$W/check") that its "calibrated_at" is today's.
+6. Pauses: read the exported learning/adjust, if there is one. For each strategy in its "paused" list that the new calibration still has switched on, leave the pause (the daily review lifts it when the strategy's graded alerts recover); for each paused strategy the calibration has switched off, remove it from "paused" and write learning/adjust back (ArtifactData "set", pinned to its version).
 7. Journal: ArtifactData "set" in collection journal, doc_id "<today's UTC date>-weekly", fields id, date (today's UTC date), created_at (UTC ISO), market_label "Weekly recalibration", insights (a list of plain sentences: the A+ win rate before and after, what switched on or off and why, which market conditions have an A+ strategy and which have none), changes (the list from step 4), notes (2 to 4 sentences: what the week's data changed and what research should target next), issues (ISSUES, if any).
 8. If the Projects tool is available, add the same entry at the top of the project doc "claude/Crypto Swing Desk - Learning Journal.md".
 Run problems: if ISSUES is not empty, load PushNotification with ToolSearch and send one notification: "Crypto Swing Desk weekly recalibration: <the most important problem, under 150 characters>".
@@ -99,7 +95,7 @@ If the engine can't run: send a PushNotification "Crypto Swing Desk weekly recal
 
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
-    files = {"close.md": scan_prompt("close"), "check.md": scan_prompt("check"), "manual.md": scan_prompt("manual"), "learning.md": LEARN + "\n", "weekly.md": WEEKLY + "\n"}
+    files = {"scan.md": scan_prompt(), "learning.md": LEARN + "\n", "weekly.md": WEEKLY + "\n"}
     for name, text in files.items():
         (OUT / name).write_text(text)
         print(name, len(text))
