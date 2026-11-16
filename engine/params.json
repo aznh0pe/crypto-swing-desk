@@ -1,0 +1,895 @@
+{
+ "version": 1,
+ "split": "2023-01-01",
+ "costs": {
+  "maker_pct": 0.5,
+  "taker_pct": 0.9,
+  "slippage_pct": 0.1
+ },
+ "risk": {
+  "risk_pct": 2.0,
+  "max_position_pct": 30.0,
+  "max_open_positions": 4,
+  "min_order_usd": 25.0,
+  "max_per_day": 3
+ },
+ "manage": {
+  "lock_atr": 2.0,
+  "lock_to": 0.5
+ },
+ "grading": {
+  "aplus_win": 0.66,
+  "aplus_min_n": 25,
+  "aplus_min_days": 10,
+  "watch_win": 0.58
+ },
+ "strategies": {
+  "DIP_UPTREND": {
+   "enabled": true,
+   "params": {
+    "rsi": 5,
+    "k": 0.25,
+    "tgt": 1.5,
+    "stop": 3.0
+   },
+   "market_conditions": [],
+   "mode": "all"
+  },
+  "LEADER_PULLBACK": {
+   "enabled": true,
+   "params": {
+    "rs": 0.8,
+    "k": 0.25,
+    "tgt": 2.0,
+    "hold": 10
+   },
+   "market_conditions": [
+    "bull_stress"
+   ],
+   "mode": "specialist"
+  },
+  "TREND_PULLBACK": {
+   "enabled": false,
+   "params": {
+    "k": 0.3,
+    "stop": 2.0,
+    "tgt": 3.0,
+    "hold": 12
+   },
+   "market_conditions": [],
+   "mode": "off"
+  },
+  "BREAKOUT_RETEST": {
+   "enabled": false,
+   "params": {
+    "vol": 2.5,
+    "base": 0.25,
+    "tgt": 3.0
+   },
+   "market_conditions": [],
+   "mode": "off"
+  },
+  "PANIC_SNAPBACK": {
+   "enabled": true,
+   "params": {
+    "mkt": -0.12,
+    "drop": -0.2,
+    "k": 0.5,
+    "stop": 3.0
+   },
+   "market_conditions": [],
+   "mode": "all"
+  },
+  "FAIR_VALUE": {
+   "enabled": false,
+   "params": {
+    "z": 2.0,
+    "k": 0.5,
+    "hold": 8
+   },
+   "market_conditions": [],
+   "mode": "off"
+  },
+  "POWER_DAY": {
+   "enabled": false,
+   "params": {
+    "pop": 0.15,
+    "k": 0.75,
+    "tgt": 2.0
+   },
+   "market_conditions": [],
+   "mode": "off"
+  },
+  "BTC_RECLAIM": {
+   "enabled": false,
+   "params": {
+    "rs": 0.6,
+    "tgt": 4.0,
+    "hold": 7
+   },
+   "market_conditions": [],
+   "mode": "off"
+  },
+  "R_DEEP_FLUSH": {
+   "enabled": true,
+   "params": {
+    "r": -0.3,
+    "k": 0.5,
+    "stop": 2.0
+   },
+   "market_conditions": [],
+   "mode": "all"
+  },
+  "R_ALT_CAPITULATION": {
+   "enabled": true,
+   "params": {
+    "a": -0.23,
+    "k": 0.5,
+    "stop": 2.0
+   },
+   "market_conditions": [],
+   "mode": "all"
+  },
+  "R_STRONG_BULL_DIP": {
+   "enabled": true,
+   "params": {
+    "r": 20,
+    "m": 0.18,
+    "k": 0.25
+   },
+   "market_conditions": [],
+   "mode": "all"
+  },
+  "R_THREE_DOWN_UPTREND": {
+   "enabled": true,
+   "params": {
+    "n": 4,
+    "k": 0.25
+   },
+   "market_conditions": [
+    "bull_stress"
+   ],
+   "mode": "specialist"
+  },
+  "R_BREADTH_WASHOUT": {
+   "enabled": true,
+   "params": {
+    "b": 0.08,
+    "k": 0.25
+   },
+   "market_conditions": [
+    "bull_stress"
+   ],
+   "mode": "specialist"
+  },
+  "R_BEAR_OVERSOLD_MAJORS": {
+   "enabled": true,
+   "params": {
+    "d": -0.15,
+    "k": 0.25
+   },
+   "market_conditions": [
+    "bear_calm"
+   ],
+   "mode": "specialist"
+  }
+ },
+ "custom": {
+  "R_DEEP_FLUSH": {
+   "spec": {
+    "id": "R_DEEP_FLUSH",
+    "label": "Deep Flush Reversal",
+    "family": "Capitulation reversal",
+    "about": "A liquid coin has lost a quarter of its value in a week and is washed out on RSI(2). Forced selling exhausts itself: bid below the close and sell the first close back above the 5-day average. Works in every market condition tested.",
+    "source": {
+     "title": "Crypto Swing Desk own design (2026-11-16)",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "all",
+    "conditions": [
+     "ret7 <= {r}",
+     "rsi2 < 15"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": "{stop}"
+    },
+    "target": {
+     "atr": 2.5
+    },
+    "exit": "sma5",
+    "max_hold": 6,
+    "valid_days": 1,
+    "params": {
+     "r": -0.25,
+     "k": 0.5,
+     "stop": 2.5
+    },
+    "grid": {
+     "r": [
+      -0.2,
+      -0.25,
+      -0.3
+     ],
+     "k": [
+      0.25,
+      0.5,
+      1.0
+     ],
+     "stop": [
+      2.0,
+      3.0
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  },
+  "R_ALT_CAPITULATION": {
+   "spec": {
+    "id": "R_ALT_CAPITULATION",
+    "label": "Alt-Market Capitulation",
+    "family": "Market-stress reversal",
+    "about": "The median liquid alt is down about a fifth or more in a week: the whole alt market is capitulating. Buy washed-out coins on a limit below the close and sell the first bounce.",
+    "source": {
+     "title": "Crypto Swing Desk own design (2026-11-16)",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "all",
+    "conditions": [
+     "alt_ret7 <= {a}",
+     "rsi2 < 15",
+     "ret3 <= -0.08"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": "{stop}"
+    },
+    "target": {
+     "atr": 2.5
+    },
+    "exit": "sma5",
+    "max_hold": 6,
+    "valid_days": 1,
+    "params": {
+     "a": -0.2,
+     "k": 0.5,
+     "stop": 2.5
+    },
+    "grid": {
+     "a": [
+      -0.17,
+      -0.2,
+      -0.23
+     ],
+     "k": [
+      0.25,
+      0.5,
+      1.0
+     ],
+     "stop": [
+      2.0,
+      3.0
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  },
+  "R_STRONG_BULL_DIP": {
+   "spec": {
+    "id": "R_STRONG_BULL_DIP",
+    "label": "Dip in a Surging Bull",
+    "family": "Mean reversion",
+    "about": "Bitcoin is up strongly over the last 30 days and above its 200-day average, and a liquid coin has a sharp three-day pullback. In a market being bought this hard, dips are bought quickly: bid below the close and sell the first close back above the 5-day average.",
+    "source": {
+     "title": "Crypto Swing Desk own design (2026-11-16)",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "all",
+    "conditions": [
+     "rsi2 < {r}",
+     "ret3 <= -0.05",
+     "btc_ret30 >= {m}",
+     "btc_above200 > 0.5"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": 2.5
+    },
+    "target": {
+     "atr": 2.5
+    },
+    "exit": "sma5",
+    "max_hold": 6,
+    "valid_days": 1,
+    "params": {
+     "r": 20,
+     "m": 0.15,
+     "k": 0.5
+    },
+    "grid": {
+     "r": [
+      10,
+      20
+     ],
+     "m": [
+      0.12,
+      0.18
+     ],
+     "k": [
+      0.25,
+      0.5
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  },
+  "R_THREE_DOWN_UPTREND": {
+   "spec": {
+    "id": "R_THREE_DOWN_UPTREND",
+    "label": "Three Down Days in an Uptrend",
+    "family": "Mean reversion",
+    "about": "Three lower closes in a row in a coin above its 100-day average, with Bitcoin's trend up. A simple streak version of the dip trade.",
+    "source": {
+     "title": "Consecutive down closes (Connors-style streak), adapted to crypto",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "all",
+    "conditions": [
+     "close > sma100",
+     "streak >= {n}",
+     "btc_above200 > 0.5",
+     "ret3 <= -0.06"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": 3.0
+    },
+    "target": {
+     "atr": 2.0
+    },
+    "exit": "prev_high",
+    "max_hold": 6,
+    "valid_days": 1,
+    "params": {
+     "n": 3,
+     "k": 0.25
+    },
+    "grid": {
+     "n": [
+      3,
+      4
+     ],
+     "k": [
+      0.25,
+      0.75
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  },
+  "R_BREADTH_WASHOUT": {
+   "spec": {
+    "id": "R_BREADTH_WASHOUT",
+    "label": "Breadth Washout Bounce",
+    "family": "Market-stress reversal",
+    "about": "Fewer than one coin in ten is above its 20-day average: the whole market is washed out. Buy the strongest 90-day names on a limit below the close.",
+    "source": {
+     "title": "Breadth washout reversal, adapted to crypto",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "all",
+    "conditions": [
+     "breadth20 < {b}",
+     "rs_pct >= 0.6",
+     "rsi2 < 15"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": 3.5
+    },
+    "target": {
+     "atr": 2.0
+    },
+    "exit": "sma5",
+    "max_hold": 5,
+    "valid_days": 1,
+    "params": {
+     "b": 0.1,
+     "k": 0.5
+    },
+    "grid": {
+     "b": [
+      0.08,
+      0.15
+     ],
+     "k": [
+      0.25,
+      0.75
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  },
+  "R_BEAR_OVERSOLD_MAJORS": {
+   "spec": {
+    "id": "R_BEAR_OVERSOLD_MAJORS",
+    "label": "Bear-Market Oversold Majors",
+    "family": "Mean reversion",
+    "about": "In a bear market (Bitcoin below its 200-day), a major coin stretches far below its 20-day average. Bear rallies are sharp: buy deep, sell fast.",
+    "source": {
+     "title": "Crypto Swing Desk own design (seed)",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    },
+    "universe": "majors",
+    "conditions": [
+     "btc_above200 < 0.5",
+     "dist20 <= {d}",
+     "rsi2 < 10"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close - {k}*atr10"
+    },
+    "stop": {
+     "atr": 3.5
+    },
+    "target": {
+     "price": "sma20",
+     "min_atr": 1.0,
+     "cap_atr": 3.0
+    },
+    "exit": "sma5",
+    "max_hold": 5,
+    "valid_days": 1,
+    "params": {
+     "d": -0.12,
+     "k": 0.5
+    },
+    "grid": {
+     "d": [
+      -0.1,
+      -0.15
+     ],
+     "k": [
+      0.25,
+      0.75
+     ]
+    }
+   },
+   "promoted_at": "2026-11-16T08:08:25Z"
+  }
+ },
+ "grade_table": {
+  "DIP_UPTREND": {
+   "bull_calm": {
+    "p": 0.6252,
+    "n": 680,
+    "days": 206,
+    "avg_ret": 0.0208,
+    "train": 0.564,
+    "train_n": 78,
+    "oos": 0.631,
+    "oos_n": 602,
+    "grade": "A"
+   },
+   "bull_stress": {
+    "p": 0.8525,
+    "n": 213,
+    "days": 63,
+    "avg_ret": 0.0809,
+    "train": 0.874,
+    "train_n": 95,
+    "oos": 0.864,
+    "oos_n": 118,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.682,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.682,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  },
+  "LEADER_PULLBACK": {
+   "bull_calm": {
+    "p": 0.6373,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bull_stress": {
+    "p": 0.6373,
+    "n": 102,
+    "days": 61,
+    "avg_ret": 0.0639,
+    "train": 0.643,
+    "train_n": 42,
+    "oos": 0.633,
+    "oos_n": 60,
+    "grade": "A"
+   },
+   "bear_calm": {
+    "p": 0.6373,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.6373,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  },
+  "PANIC_SNAPBACK": {
+   "bull_calm": {
+    "p": 0.7294,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bull_stress": {
+    "p": 0.8066,
+    "n": 39,
+    "days": 7,
+    "avg_ret": 0.1473,
+    "train": 0.842,
+    "train_n": 38,
+    "oos": 1.0,
+    "oos_n": 1,
+    "grade": "A"
+   },
+   "bear_calm": {
+    "p": 0.7294,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.6993,
+    "n": 131,
+    "days": 18,
+    "avg_ret": 0.0948,
+    "train": 0.612,
+    "train_n": 98,
+    "oos": 0.939,
+    "oos_n": 33,
+    "grade": "A+"
+   }
+  },
+  "R_ALT_CAPITULATION": {
+   "bull_calm": {
+    "p": 0.9596,
+    "n": 79,
+    "days": 1,
+    "avg_ret": 0.1081,
+    "train": null,
+    "train_n": 0,
+    "oos": 0.987,
+    "oos_n": 79,
+    "grade": "A"
+   },
+   "bull_stress": {
+    "p": 0.8698,
+    "n": 149,
+    "days": 15,
+    "avg_ret": 0.1051,
+    "train": 0.854,
+    "train_n": 82,
+    "oos": 0.896,
+    "oos_n": 67,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.8501,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.8019,
+    "n": 293,
+    "days": 23,
+    "avg_ret": 0.1191,
+    "train": 0.755,
+    "train_n": 229,
+    "oos": 0.953,
+    "oos_n": 64,
+    "grade": "A+"
+   }
+  },
+  "R_BEAR_OVERSOLD_MAJORS": {
+   "bull_calm": {
+    "p": 0.6452,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bull_stress": {
+    "p": 0.6452,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_calm": {
+    "p": 0.6452,
+    "n": 93,
+    "days": 49,
+    "avg_ret": 0.0253,
+    "train": 0.646,
+    "train_n": 65,
+    "oos": 0.643,
+    "oos_n": 28,
+    "grade": "A"
+   },
+   "bear_stress": {
+    "p": 0.6452,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  },
+  "R_BREADTH_WASHOUT": {
+   "bull_calm": {
+    "p": 0.7656,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bull_stress": {
+    "p": 0.7656,
+    "n": 256,
+    "days": 59,
+    "avg_ret": 0.0605,
+    "train": 0.758,
+    "train_n": 120,
+    "oos": 0.772,
+    "oos_n": 136,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.7656,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.7656,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  },
+  "R_DEEP_FLUSH": {
+   "bull_calm": {
+    "p": 0.7203,
+    "n": 20,
+    "days": 12,
+    "avg_ret": 0.0268,
+    "train": 0.75,
+    "train_n": 4,
+    "oos": 0.562,
+    "oos_n": 16,
+    "grade": "A"
+   },
+   "bull_stress": {
+    "p": 0.8484,
+    "n": 34,
+    "days": 12,
+    "avg_ret": 0.1574,
+    "train": 0.88,
+    "train_n": 25,
+    "oos": 0.778,
+    "oos_n": 9,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.8271,
+    "n": 10,
+    "days": 8,
+    "avg_ret": 0.1046,
+    "train": 0.75,
+    "train_n": 4,
+    "oos": 0.833,
+    "oos_n": 6,
+    "grade": "A"
+   },
+   "bear_stress": {
+    "p": 0.8632,
+    "n": 186,
+    "days": 38,
+    "avg_ret": 0.152,
+    "train": 0.858,
+    "train_n": 155,
+    "oos": 0.903,
+    "oos_n": 31,
+    "grade": "A+"
+   }
+  },
+  "R_STRONG_BULL_DIP": {
+   "bull_calm": {
+    "p": 0.6915,
+    "n": 911,
+    "days": 154,
+    "avg_ret": 0.0215,
+    "train": 0.706,
+    "train_n": 333,
+    "oos": 0.682,
+    "oos_n": 578,
+    "grade": "A+"
+   },
+   "bull_stress": {
+    "p": 0.9118,
+    "n": 254,
+    "days": 46,
+    "avg_ret": 0.0962,
+    "train": 0.961,
+    "train_n": 102,
+    "oos": 0.901,
+    "oos_n": 152,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.7416,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.7416,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  },
+  "R_THREE_DOWN_UPTREND": {
+   "bull_calm": {
+    "p": 0.7803,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bull_stress": {
+    "p": 0.7803,
+    "n": 132,
+    "days": 55,
+    "avg_ret": 0.0696,
+    "train": 0.762,
+    "train_n": 80,
+    "oos": 0.808,
+    "oos_n": 52,
+    "grade": "A+"
+   },
+   "bear_calm": {
+    "p": 0.7803,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   },
+   "bear_stress": {
+    "p": 0.7803,
+    "n": 0,
+    "days": 0,
+    "avg_ret": 0.0,
+    "train": null,
+    "train_n": 0,
+    "oos": null,
+    "oos_n": 0,
+    "grade": "B"
+   }
+  }
+ },
+ "calibrated_at": "2026-11-16T08:08:25Z",
+ "data_through": "2026-11-15"
+}

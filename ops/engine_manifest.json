@@ -1,0 +1,40 @@
+{
+ "fingerprint": "014bfc927a27",
+ "files": [
+  "engine/__init__.py",
+  "engine/backtest.py",
+  "engine/calibrate.py",
+  "engine/data.py",
+  "engine/indicators.py",
+  "engine/learn.py",
+  "engine/lessons.py",
+  "engine/portfolio.py",
+  "engine/research.py",
+  "engine/rules.py",
+  "engine/scan.py",
+  "engine/strategies.py",
+  "engine/version.py",
+  "engine/params.json",
+  "engine/research_seed.json",
+  "engine/strategies.json"
+ ],
+ "published": [
+  "engine/__init__.py.txt",
+  "engine/backtest.py.txt",
+  "engine/calibrate.py.txt",
+  "engine/data.py.txt",
+  "engine/indicators.py.txt",
+  "engine/learn.py.txt",
+  "engine/lessons.py.txt",
+  "engine/portfolio.py.txt",
+  "engine/research.py.txt",
+  "engine/rules.py.txt",
+  "engine/scan.py.txt",
+  "engine/strategies.py.txt",
+  "engine/version.py.txt",
+  "engine/params.json",
+  "engine/research_seed.json",
+  "engine/strategies.json"
+ ],
+ "about": "Crypto Swing Desk engine, identical to engine/ in the GitHub repo. Scheduled runs read the \"published\" files with the Artifact tool, drop the .txt from the Python files and run them."
+}

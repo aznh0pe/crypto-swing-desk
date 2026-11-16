@@ -118,13 +118,14 @@ def grade_table(trades: pd.DataFrame, split: str, G: dict, train_only: bool = Fa
             x = src[src["condition"] == c]
             a, o = g[(g["condition"] == c) & (g["signal_date"] < cut)], g[(g["condition"] == c) & (g["signal_date"] >= cut)]
             n, w = len(x), int((x["ret"] > 0).sum())
+            days = int(x["signal_date"].nunique())
             p = (w + 20 * base) / (n + 20)
             aw, ow = (float((a["ret"] > 0).mean()) if len(a) else None), (float((o["ret"] > 0).mean()) if len(o) else None)
             avg = float(x["ret"].mean()) if n else 0.0
-            strong = (n >= G["aplus_min_n"] and p >= G["aplus_win"] and avg > 0.004 and (aw is None or len(a) < 10 or aw >= G["watch_win"])
+            strong = (n >= G["aplus_min_n"] and days >= G.get("aplus_min_days", 10) and p >= G["aplus_win"] and avg > 0.004 and (aw is None or len(a) < 10 or aw >= G["watch_win"])
                       and (train_only or (ow is not None and len(o) >= 8 and ow >= G["watch_win"])))
             grade = "A+" if strong else ("A" if p >= G["watch_win"] and avg > 0 else "B")
-            out[sid][c] = {"p": round(p, 4), "n": int(n), "avg_ret": round(avg, 4), "train": None if aw is None else round(aw, 3),
+            out[sid][c] = {"p": round(p, 4), "n": int(n), "days": days, "avg_ret": round(avg, 4), "train": None if aw is None else round(aw, 3),
                            "train_n": int(len(a)), "oos": None if ow is None else round(ow, 3), "oos_n": int(len(o)), "grade": grade}
     return out
 
@@ -161,7 +162,7 @@ def run_backtest(data_dir, state_params: dict | None = None, extra_specs: list |
     table = grade_table(allt, P["split"], G) if len(allt) else {}
     P["grade_table"] = table
     grading = {"rule": (f"A+ = the strategy's record in today's market condition shows {100 * G['aplus_win']:.0f}%+ wins after fees "
-                        f"(at least {G['aplus_min_n']} trades, shrunk toward its overall rate) and held up on unseen data. "
+                        f"(at least {G['aplus_min_n']} trades on {G.get('aplus_min_days', 10)}+ separate days, shrunk toward its overall rate) and held up on unseen data. "
                         "A = 58%+; listed as a watchlist setup, not sent as an alert.")}
     if len(allt):
         g = apply_grades(allt, table)
@@ -173,9 +174,12 @@ def run_backtest(data_dir, state_params: dict | None = None, extra_specs: list |
         allst = bt.done(g)
         grading["all_enabled"] = bt.stats(allst)
         rk = P["risk"]
-        grading["account_replay"] = {"what": f"$1,500 start, A+ setups only, {rk['max_open_positions']} slots, {rk['risk_pct']}% risk a trade",
+        grading["account_replay"] = {"what": f"$1,500 start, A+ setups only, {rk['max_open_positions']} slots, {rk['risk_pct']}% risk a trade, position cap {rk['max_position_pct']}%",
                                      "full_history": bt.portfolio(ap, 1500.0, rk["max_open_positions"], rk["risk_pct"], rk["max_position_pct"]),
                                      "unseen_only": bt.portfolio(ap[ap["signal_date"] >= pd.Timestamp(P["split"])], 1500.0, rk["max_open_positions"], rk["risk_pct"], rk["max_position_pct"])}
+        cutp = pd.Timestamp(P["split"])
+        grading["sizing"] = [{"risk_pct": rp, **{k: bt.portfolio(x, 1500.0, rk["max_open_positions"], rp, rk["max_position_pct"]) for k, x in (("full_history", ap), ("unseen_only", ap[ap["signal_date"] >= cutp]))}}
+                             for rp in (1.0, 2.0, 3.0, 5.0)]
     mk = ind["market"]
     cs = I.condition_series(mk).dropna()
     share = cs.value_counts(normalize=True).round(3).to_dict()
@@ -205,15 +209,34 @@ def clean(o):
     return o
 
 
-def write_docs(out, docs: dict, versions: dict | None = None):
-    """docs = {"collection/doc": data}. Writes each as a file under out/docs/ and out/writes.json for the database."""
+KEEP_STATS = ("trades", "win_rate", "avg_ret", "profit_factor", "avg_hold", "fill_rate", "signal_days", "day_win_rate", "worst_loss")
+
+
+def slim_report(report: dict) -> dict:
+    """The version of the report the dashboard stores: everything it shows, without the bulky search detail
+    (the full report stays in backtest_report.json)."""
+    out = {k: v for k, v in report.items() if k not in ("strategies", "grade_table", "specialist_rule", "enable_rule")}
+    g = out.get("grading") or {}
+    for k in ("aplus", "honest_check", "all_enabled"):   # drop the bulky exit mix
+        if isinstance(g.get(k), dict):
+            g[k] = {a: b for a, b in g[k].items() if a not in ("exit_mix", "median_ret", "avg_r")}
+    out["strategies"] = {}
+    for sid, r in report["strategies"].items():
+        out["strategies"][sid] = {**{k: r.get(k) for k in ("label", "family", "about", "params", "enabled", "mode", "market_conditions", "reason", "rules")},
+                                  "train": {k: r["train"].get(k) for k in KEEP_STATS}, "oos": {k: r["oos"].get(k) for k in KEEP_STATS},
+                                  "checks": [{k: c.get(k) for k in ("key", "value", "need", "ok")} for c in r.get("checks", [])]}
+    return out
+
+
+def write_docs_coll(out, docs: list) -> list:
+    """docs = [(collection, doc_id, data)]. Writes each under out/docs/ plus out/writes.json for the database."""
     out = pathlib.Path(out)
     writes = []
-    for path, doc in docs.items():
-        f = out / "docs" / (path + ".json")
+    for coll, did, doc in docs:
+        f = out / "docs" / coll / f"{did}.json"
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(clean(doc), separators=(",", ":")))
-        writes.append({"op": "set", "path": path, "file": str(f)})
+        f.write_text(json.dumps(clean(doc), separators=(",", ":"), default=str))
+        writes.append({"op": "set", "collection": coll, "doc_id": did, "file_path": str(f.resolve())})
     (out / "writes.json").write_text(json.dumps(writes, indent=1))
     return writes
 
@@ -241,7 +264,7 @@ def main():
             P["strategies"].pop(sid, None)
     (out / "params.json").write_text(json.dumps(clean(P), indent=1))
     (out / "backtest_report.json").write_text(json.dumps(clean(report), indent=1))
-    write_docs(out, {"strategy/params": P, "strategy/backtest": report})
+    write_docs_coll(out, [("strategy", "params", P), ("strategy", "backtest", slim_report(report))])
     for sid, r in report["strategies"].items():
         t, o = r["train"], r["oos"]
         print(f"{sid:16s} {'ON ' if r['enabled'] else 'off'} {r['mode']:12s} train n={t.get('trades', 0):5d} win={t.get('win_rate')} pf={t.get('profit_factor')} avg={t.get('avg_ret')} | "

@@ -11,13 +11,13 @@ from .indicators import base_masks, CONDITIONS
 HERE = pathlib.Path(__file__).resolve().parent
 SPLIT = "2023-01-01"     # training years end here; everything after is unseen data
 # The live-trading bar, after fees. Win rate comes first; profit factor and average trade keep it honest.
-ENABLE_RULE = {"train_win": 0.58, "train_pf": 1.30, "train_avg": 0.004, "train_n": 40, "oos_n": 20, "oos_pf": 1.10, "oos_decay": 0.08}
+ENABLE_RULE = {"train_win": 0.58, "train_pf": 1.30, "train_avg": 0.004, "train_n": 40, "train_day_win": 0.55, "oos_n": 20, "oos_pf": 1.10, "oos_decay": 0.08}
 DEFAULT_PARAMS = {
     "version": 1, "split": SPLIT,
     "costs": {"maker_pct": 0.50, "taker_pct": 0.90, "slippage_pct": 0.10},
-    "risk": {"risk_pct": 1.5, "max_position_pct": 30.0, "max_open_positions": 4, "min_order_usd": 25.0, "max_per_day": 3},
+    "risk": {"risk_pct": 2.0, "max_position_pct": 30.0, "max_open_positions": 4, "min_order_usd": 25.0, "max_per_day": 3},
     "manage": {"lock_atr": 2.0, "lock_to": 0.5},
-    "grading": {"aplus_win": 0.66, "aplus_min_n": 25, "watch_win": 0.58},
+    "grading": {"aplus_win": 0.66, "aplus_min_n": 25, "aplus_min_days": 10, "watch_win": 0.58},
     "strategies": {}, "custom": {},
 }
 
@@ -85,6 +85,7 @@ def enable_checks(tr: dict, te: dict) -> tuple[bool, list, str]:
         {"key": "train_win", "label": "Win rate, training years", "value": tw, "need": f">= {R['train_win']:.0%}", "ok": tw is not None and tw >= R["train_win"]},
         {"key": "train_pf", "label": "Profit factor, training years", "value": tpf, "need": f">= {R['train_pf']:.2f}", "ok": tpf is not None and tpf >= R["train_pf"]},
         {"key": "train_avg", "label": "Average trade after fees, training years", "value": tav, "need": f"> +{100 * R['train_avg']:.1f}%", "ok": tav is not None and tav > R["train_avg"]},
+        {"key": "train_day_win", "label": "Winning signal days, training years", "value": tr.get("day_win_rate"), "need": f">= {R['train_day_win']:.0%}", "ok": (tr.get("day_win_rate") or 0) >= R["train_day_win"]},
         {"key": "oos_n", "label": "Trades on unseen data", "value": on, "need": f">= {R['oos_n']}", "ok": on >= R["oos_n"]},
         {"key": "oos_pf", "label": "Profit factor, unseen data", "value": opf, "need": f">= {R['oos_pf']:.2f}", "ok": bool(on) and opf is not None and opf >= R["oos_pf"]},
         {"key": "oos_decay", "label": "Win-rate drop on unseen data", "value": dec, "need": f"<= {100 * R['oos_decay']:.0f} pts", "ok": dec is not None and dec <= R["oos_decay"] + 1e-9},

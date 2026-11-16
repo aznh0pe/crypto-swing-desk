@@ -1,58 +1,393 @@
 [
- {"id": "DIP_UPTREND", "label": "RSI(2) Dip in an Uptrend", "family": "Mean reversion",
+ {
+  "id": "DIP_UPTREND",
+  "label": "RSI(2) Dip in an Uptrend",
+  "family": "Mean reversion",
   "about": "A coin in a rising long-term trend gets washed out for a day or two while Bitcoin's own trend is up. Buy the flush with a limit below the close and sell the snap back.",
   "universe": "all",
-  "conditions": ["close > sma200", "slope200 > 0", "rsi2 < {rsi}", "close < sma5", "btc_above200 > 0.5"],
-  "entry": {"kind": "limit_next", "price": "close - {k}*atr10"}, "stop": {"atr": 3.0}, "target": {"atr": "{tgt}"},
-  "exit": "sma5", "max_hold": 7, "valid_days": 1,
-  "params": {"rsi": 10, "k": 0.5, "tgt": 2.0}, "grid": {"rsi": [5, 10, 15], "k": [0.25, 0.5, 1.0], "tgt": [1.5, 2.5]}},
- {"id": "LEADER_PULLBACK", "label": "Leader 7-Day Pullback", "family": "Momentum pullback",
+  "conditions": [
+   "close > sma200",
+   "slope200 > 0",
+   "rsi2 < {rsi}",
+   "close < sma5",
+   "btc_above200 > 0.5"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "close - {k}*atr10"
+  },
+  "stop": {
+   "atr": "{stop}"
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "sma5",
+  "max_hold": 7,
+  "valid_days": 1,
+  "params": {
+   "rsi": 10,
+   "k": 0.5,
+   "tgt": 2.0,
+   "stop": 3.0
+  },
+  "grid": {
+   "rsi": [
+    5,
+    10
+   ],
+   "k": [
+    0.25,
+    0.5,
+    1.0
+   ],
+   "tgt": [
+    1.5,
+    2.5
+   ],
+   "stop": [
+    2.0,
+    3.0
+   ]
+  }
+ },
+ {
+  "id": "LEADER_PULLBACK",
+  "label": "Leader 7-Day Pullback",
+  "family": "Momentum pullback",
   "about": "One of the strongest coins of the last 90 days pulls back to a 7-day closing low while still above its 50-day average. Strength tends to resume.",
   "universe": "all",
-  "conditions": ["rs_pct >= {rs}", "close > sma50", "sma50 > sma200", "close <= min7c", "rsi2 < 20"],
-  "entry": {"kind": "limit_next", "price": "close - {k}*atr10"}, "stop": {"atr": 2.5}, "target": {"atr": "{tgt}"},
-  "exit": "high7", "max_hold": "{hold}", "valid_days": 1,
-  "params": {"rs": 0.8, "k": 0.25, "tgt": 2.0, "hold": 7}, "grid": {"rs": [0.7, 0.8], "k": [0.25, 0.75], "tgt": [2.0, 3.0], "hold": [7, 10]}},
- {"id": "TREND_PULLBACK", "label": "Trend Pullback to the 20-Day EMA", "family": "Trend continuation",
+  "conditions": [
+   "rs_pct >= {rs}",
+   "close > sma50",
+   "sma50 > sma200",
+   "close <= min7c",
+   "rsi2 < 20"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "close - {k}*atr10"
+  },
+  "stop": {
+   "atr": 2.5
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "high7",
+  "max_hold": "{hold}",
+  "valid_days": 1,
+  "params": {
+   "rs": 0.8,
+   "k": 0.25,
+   "tgt": 2.0,
+   "hold": 7
+  },
+  "grid": {
+   "rs": [
+    0.7,
+    0.8
+   ],
+   "k": [
+    0.25,
+    0.75
+   ],
+   "tgt": [
+    2.0,
+    3.0
+   ],
+   "hold": [
+    7,
+    10
+   ]
+  }
+ },
+ {
+  "id": "TREND_PULLBACK",
+  "label": "Trend Pullback to the 20-Day EMA",
+  "family": "Trend continuation",
   "about": "An established uptrend (50-day above 200-day, fresh 20-day high within 10 days) dips to its 20-day EMA and holds it. Buy at the average with a tight stop under it.",
   "universe": "all",
-  "conditions": ["sma50 > sma200", "close > sma50", "slope50 > 0", "low <= ema20 + 0.25*atr10", "close >= ema20 - 0.5*atr10", "rsi14 >= 38", "rsi14 <= 60", "hh10 >= hh20"],
-  "entry": {"kind": "limit_next", "price": "min(close, ema20 + 0.1*atr10) - {k}*atr10"}, "stop": {"atr": "{stop}"}, "target": {"atr": "{tgt}"},
-  "exit": "none", "max_hold": "{hold}", "valid_days": 1,
-  "params": {"k": 0.0, "stop": 2.0, "tgt": 2.0, "hold": 8}, "grid": {"k": [0.0, 0.3], "stop": [2.0, 3.0], "tgt": [2.0, 3.0], "hold": [8, 12]}},
- {"id": "BREAKOUT_RETEST", "label": "20-Day Breakout Retest", "family": "Breakout",
+  "conditions": [
+   "sma50 > sma200",
+   "close > sma50",
+   "slope50 > 0",
+   "low <= ema20 + 0.25*atr10",
+   "close >= ema20 - 0.5*atr10",
+   "rsi14 >= 38",
+   "rsi14 <= 60",
+   "hh10 >= hh20"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "min(close, ema20 + 0.1*atr10) - {k}*atr10"
+  },
+  "stop": {
+   "atr": "{stop}"
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "none",
+  "max_hold": "{hold}",
+  "valid_days": 1,
+  "params": {
+   "k": 0.0,
+   "stop": 2.0,
+   "tgt": 2.0,
+   "hold": 8
+  },
+  "grid": {
+   "k": [
+    0.0,
+    0.3
+   ],
+   "stop": [
+    2.0,
+    3.0
+   ],
+   "tgt": [
+    2.0,
+    3.0
+   ],
+   "hold": [
+    8,
+    12
+   ]
+  }
+ },
+ {
+  "id": "BREAKOUT_RETEST",
+  "label": "20-Day Breakout Retest",
+  "family": "Breakout",
   "about": "A coin closes above a tight 20-day range on heavy volume while Bitcoin is above its 50-day average. Don't chase: buy the retest of the breakout level within three days.",
   "universe": "all",
-  "conditions": ["close > hh20[1]", "vol_ratio > {vol}", "close > sma50", "btc_above50 > 0.5", "(hh20[1] - ll20[1]) / close < {base}"],
-  "entry": {"kind": "limit_next", "price": "hh20[1] + 0.1*atr10"}, "stop": {"atr": 2.0}, "target": {"atr": "{tgt}"},
-  "exit": "ema10_lost", "max_hold": 12, "valid_days": 3,
-  "params": {"vol": 1.5, "base": 0.4, "tgt": 3.0}, "grid": {"vol": [1.5, 2.5], "base": [0.25, 0.4], "tgt": [3.0, 5.0]}},
- {"id": "PANIC_SNAPBACK", "label": "Capitulation Snapback", "family": "Market-stress reversal",
+  "conditions": [
+   "close > hh20[1]",
+   "vol_ratio > {vol}",
+   "close > sma50",
+   "btc_above50 > 0.5",
+   "(hh20[1] - ll20[1]) / close < {base}"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "hh20[1] + 0.1*atr10"
+  },
+  "stop": {
+   "atr": 2.0
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "ema10_lost",
+  "max_hold": 12,
+  "valid_days": 3,
+  "params": {
+   "vol": 1.5,
+   "base": 0.4,
+   "tgt": 3.0
+  },
+  "grid": {
+   "vol": [
+    1.5,
+    2.5
+   ],
+   "base": [
+    0.25,
+    0.4
+   ],
+   "tgt": [
+    3.0,
+    5.0
+   ]
+  }
+ },
+ {
+  "id": "PANIC_SNAPBACK",
+  "label": "Capitulation Snapback",
+  "family": "Market-stress reversal",
   "about": "The whole market is being sold (Bitcoin down hard over a week) and a liquid coin is flushed to an extreme. Buy deep below the close and sell the first bounce. Built for selloffs, in bull or bear markets.",
   "universe": "all",
-  "conditions": ["btc_ret7 <= {mkt}", "rsi2 < 8", "ret3 <= {drop}", "dd90 > -0.75"],
-  "entry": {"kind": "limit_next", "price": "close - {k}*atr10"}, "stop": {"atr": 3.5}, "target": {"atr": 2.0},
-  "exit": "sma5", "max_hold": 5, "valid_days": 1,
-  "params": {"mkt": -0.08, "drop": -0.12, "k": 0.5}, "grid": {"mkt": [-0.08, -0.12], "drop": [-0.12, -0.2], "k": [0.5, 1.0]}},
- {"id": "FAIR_VALUE", "label": "Below Fair Value (VWAP-20)", "family": "Fair value",
+  "conditions": [
+   "btc_ret7 <= {mkt}",
+   "rsi2 < 8",
+   "ret3 <= {drop}",
+   "dd90 > -0.75"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "close - {k}*atr10"
+  },
+  "stop": {
+   "atr": "{stop}"
+  },
+  "target": {
+   "atr": 2.0
+  },
+  "exit": "sma5",
+  "max_hold": 5,
+  "valid_days": 1,
+  "params": {
+   "mkt": -0.08,
+   "drop": -0.12,
+   "k": 0.5,
+   "stop": 3.0
+  },
+  "grid": {
+   "mkt": [
+    -0.08,
+    -0.12
+   ],
+   "drop": [
+    -0.12,
+    -0.2
+   ],
+   "k": [
+    0.5,
+    1.0
+   ],
+   "stop": [
+    2.0,
+    3.0
+   ]
+  }
+ },
+ {
+  "id": "FAIR_VALUE",
+  "label": "Below Fair Value (VWAP-20)",
+  "family": "Fair value",
   "about": "In a long-term uptrend, price stretches well below its 20-day volume-weighted average price. Buy the stretch and sell the rotation back to fair value.",
   "universe": "all",
-  "conditions": ["close > sma200", "close < vwap20 - {z}*vstd20", "rsi2 < 25", "btc_above200 > 0.5"],
-  "entry": {"kind": "limit_next", "price": "close - {k}*atr10"}, "stop": {"atr": 3.0}, "target": {"price": "vwap20", "min_atr": 0.75, "cap_atr": 4.0},
-  "exit": "none", "max_hold": "{hold}", "valid_days": 1,
-  "params": {"z": 1.5, "k": 0.0, "hold": 6}, "grid": {"z": [1.5, 2.0], "k": [0.0, 0.5], "hold": [5, 8]}},
- {"id": "POWER_DAY", "label": "Power-Day Pullback", "family": "Momentum ignition",
+  "conditions": [
+   "close > sma200",
+   "close < vwap20 - {z}*vstd20",
+   "rsi2 < 25",
+   "btc_above200 > 0.5"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "close - {k}*atr10"
+  },
+  "stop": {
+   "atr": 3.0
+  },
+  "target": {
+   "price": "vwap20",
+   "min_atr": 0.75,
+   "cap_atr": 4.0
+  },
+  "exit": "none",
+  "max_hold": "{hold}",
+  "valid_days": 1,
+  "params": {
+   "z": 1.5,
+   "k": 0.0,
+   "hold": 6
+  },
+  "grid": {
+   "z": [
+    1.5,
+    2.0
+   ],
+   "k": [
+    0.0,
+    0.5
+   ],
+   "hold": [
+    5,
+    8
+   ]
+  }
+ },
+ {
+  "id": "POWER_DAY",
+  "label": "Power-Day Pullback",
+  "family": "Momentum ignition",
   "about": "A coin prints a big, heavy-volume up day, then rests for a day or two without giving back half the move. Buy the rest day's dip for the second leg.",
   "universe": "all",
-  "conditions": ["rmax(ret1, 4) >= {pop}", "ret1 < 0.03", "close > sma50", "close > rmin(low, 4) + 0.5*(rmax(high, 4) - rmin(low, 4))", "rmax(vol_ratio, 4) >= 2.5", "btc_above50 > 0.5"],
-  "entry": {"kind": "limit_next", "price": "close - {k}*atr10"}, "stop": {"atr": 2.5}, "target": {"atr": "{tgt}"},
-  "exit": "ema10_lost", "max_hold": 8, "valid_days": 1,
-  "params": {"pop": 0.12, "k": 0.25, "tgt": 3.0}, "grid": {"pop": [0.1, 0.15], "k": [0.25, 0.75], "tgt": [2.0, 3.0]}},
- {"id": "BTC_RECLAIM", "label": "Majors on a Bitcoin Reclaim", "family": "Regime shift",
+  "conditions": [
+   "rmax(ret1, 4) >= {pop}",
+   "ret1 < 0.03",
+   "close > sma50",
+   "close > rmin(low, 4) + 0.5*(rmax(high, 4) - rmin(low, 4))",
+   "rmax(vol_ratio, 4) >= 2.5",
+   "btc_above50 > 0.5"
+  ],
+  "entry": {
+   "kind": "limit_next",
+   "price": "close - {k}*atr10"
+  },
+  "stop": {
+   "atr": 2.5
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "ema10_lost",
+  "max_hold": 8,
+  "valid_days": 1,
+  "params": {
+   "pop": 0.12,
+   "k": 0.25,
+   "tgt": 3.0
+  },
+  "grid": {
+   "pop": [
+    0.1,
+    0.15
+   ],
+   "k": [
+    0.25,
+    0.75
+   ],
+   "tgt": [
+    2.0,
+    3.0
+   ]
+  }
+ },
+ {
+  "id": "BTC_RECLAIM",
+  "label": "Majors on a Bitcoin Reclaim",
+  "family": "Regime shift",
   "about": "Bitcoin closes back above its 50-day average after at least nine of ten days below it. Buy the large, liquid coins that are already above their own 20-day average.",
   "universe": "majors",
-  "conditions": ["btc_above50 > 0.5", "rsum(btc_above50, 10)[1] <= 1", "close > sma20", "rs30_pct >= {rs}"],
-  "entry": {"kind": "open_next"}, "stop": {"atr": 2.5}, "target": {"atr": "{tgt}"},
-  "exit": "ema10_lost", "max_hold": "{hold}", "valid_days": 1,
-  "params": {"rs": 0.5, "tgt": 3.0, "hold": 10}, "grid": {"rs": [0.3, 0.6], "tgt": [2.0, 4.0], "hold": [7, 14]}}
+  "conditions": [
+   "btc_above50 > 0.5",
+   "rsum(btc_above50, 10)[1] <= 1",
+   "close > sma20",
+   "rs30_pct >= {rs}"
+  ],
+  "entry": {
+   "kind": "open_next"
+  },
+  "stop": {
+   "atr": 2.5
+  },
+  "target": {
+   "atr": "{tgt}"
+  },
+  "exit": "ema10_lost",
+  "max_hold": "{hold}",
+  "valid_days": 1,
+  "params": {
+   "rs": 0.5,
+   "tgt": 3.0,
+   "hold": 10
+  },
+  "grid": {
+   "rs": [
+    0.3,
+    0.6
+   ],
+   "tgt": [
+    2.0,
+    4.0
+   ],
+   "hold": [
+    7,
+    14
+   ]
+  }
+ }
 ]

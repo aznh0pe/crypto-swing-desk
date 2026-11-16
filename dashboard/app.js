@@ -1,0 +1,590 @@
+(() => {
+"use strict";
+// ---------------------------------------------------------------- state
+const S = { settings: null, alerts: [], alertsRaw: [], trades: [], ledger: [], scans: [], journal: [], params: null, backtest: null,
+  research: [], results: [], learning: {}, loaded: {}, db: null, mcp: null, tab: "overview", perf: "all", dbError: null, starting: false };
+const TABS = [["overview", "Overview"], ["alerts", "Alerts"], ["log", "Trade log"], ["funds", "Funds"], ["scans", "Scans"], ["lab", "Strategy lab"]];
+const DEFAULTS = { initial_balance: 1500, max_open_positions: 4, risk_pct: 2.0, max_position_pct: 30, maker_fee_pct: 0.5, taker_fee_pct: 0.9, exchange: "Coinbase Advanced" };
+const COND = { bull_calm: "Calm bull", bull_stress: "Bull shake-out", bear_calm: "Quiet bear", bear_stress: "Bear selloff" };
+const COND_ORDER = ["bull_calm", "bull_stress", "bear_calm", "bear_stress"];
+const CHECKS = { train_n: "Trades in the training years", train_win: "Win rate, training years", train_pf: "Profit factor, training years", train_avg: "Average trade after fees, training years",
+  train_day_win: "Winning signal days, training years", oos_n: "Trades on unseen data", oos_pf: "Profit factor, unseen data", oos_decay: "Win-rate drop on unseen data" };
+const SELL_REASONS = ["Target filled", "Stop filled", "Exit signal", "Time stop", "Manual"];
+
+// ---------------------------------------------------------------- utils
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const num = (v) => { if (v === null || v === undefined || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
+const money = (v, d = 2) => { const n = num(v); if (n === null) return "–"; return (n < 0 ? "−$" : "$") + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); };
+const smoney = (v) => { const n = num(v); if (n === null) return "–"; return (n > 0 ? "+" : n < 0 ? "−" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+const pct = (v, d = 1) => { const n = num(v); return n === null ? "–" : n.toFixed(d) + "%"; };
+const spct = (v, d = 1) => { const n = num(v); return n === null ? "–" : (n > 0 ? "+" : n < 0 ? "−" : "") + Math.abs(n).toFixed(d) + "%"; };
+// crypto prices span $0.00001 to $100,000: show five significant figures, never fewer than two decimals above $1
+function fp(v) { const n = num(v); if (n === null) return "–"; const a = Math.abs(n);
+  if (a >= 1000) return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (a >= 1) return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+  if (a === 0) return "$0"; const d = Math.min(10, Math.max(4, 4 - Math.floor(Math.log10(a)))); return "$" + n.toFixed(d).replace(/0+$/, "").replace(/\.$/, ""); }
+const qty = (v) => { const n = num(v); return n === null ? "–" : String(+n.toPrecision(6)); };
+const signCls = (v) => (num(v) > 0 ? "pnl-up" : num(v) < 0 ? "pnl-dn" : "pnl-flat");
+const nowIso = () => new Date().toISOString();
+const fmtDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" });
+const todayPT = () => fmtDay.format(new Date());
+function dtPT(iso) { if (!iso) return "–"; const t = new Date(iso); return isNaN(t) ? esc(iso) : t.toLocaleString("en-US", { timeZone: "America/Los_Angeles", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " PT"; }
+function dPT(iso) { if (!iso) return "–"; const t = new Date(String(iso).length <= 10 ? iso + "T12:00:00Z" : iso); return isNaN(t) ? esc(iso) : t.toLocaleDateString("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" }); }
+function span(ms) { if (ms <= 0) return "0m"; const m = Math.floor(ms / 60000), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m % 60}m` : `${m}m`; }
+function toast(msg, ms = 4500) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; t.setAttribute("role", "status"); document.body.appendChild(t); setTimeout(() => t.remove(), ms); }
+function settings() { return Object.assign({}, DEFAULTS, S.settings || {}); }
+const kid = (id) => String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
+const uid = (p) => p + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function pill(tone, text) { return `<span class="pill ${tone}">${esc(text)}</span>`; }
+function kpi(k, v, s) { return `<div class="kpi"><span class="k">${k}</span><span class="v">${v}</span>${s ? `<span class="s">${s}</span>` : ""}</div>`; }
+function stat(k, v) { return `<div><div class="k">${k}</div><div class="v">${v ?? "–"}</div></div>`; }
+
+// ---------------------------------------------------------------- derived
+// Alerts are written once; each later scan sends its view of live ones (last price, withdrawn) in alert_updates.
+function mergeAlerts() {
+  const ov = {};
+  for (const sc of S.scans) { const au = sc.alert_updates; if (!au || typeof au !== "object") continue;
+    for (const id of Object.keys(au)) if (!(id in ov)) ov[id] = { ...au[id], _ov_at: sc.started_at }; }
+  S.alerts = S.alertsRaw.map((a) => (ov[a.id] ? { ...a, ...ov[a.id] } : a));
+}
+function fillCheckMap() { const m = {}; for (const sc of S.scans) for (const c of sc.fill_checks || []) if (c.alert_id && !(c.alert_id in m)) m[c.alert_id] = { ...c, _at: sc.started_at }; return m; }
+const windowOver = (a) => a.valid_until && Date.now() >= Date.parse(a.valid_until);
+const windowOpen = (a) => !a.valid_from || Date.now() >= Date.parse(a.valid_from);
+function entryLive(a) { return a.type === "entry" && (a.status === "new" || a.status === "placed") && !windowOver(a) && !(a.withdrawn && a.status === "new"); }
+function toResolve() { return S.alerts.filter((a) => a.type === "entry" && a.status === "placed" && windowOver(a)); }
+function exitAlerts() { const open = new Set(S.trades.filter((t) => t.status === "open").map((t) => t.id));
+  return S.alerts.filter((a) => a.type === "exit" && a.status === "new" && open.has(a.trade_id)); }
+function latestMarks() { const out = {}; for (const sc of S.scans) for (const p of sc.positions || []) if (p.trade_id && !out[p.trade_id]) out[p.trade_id] = { ...p, scan_at: sc.started_at }; return out; }
+function openTrades() { return S.trades.filter((t) => t.status === "open").sort((a, b) => String(a.entry_at).localeCompare(String(b.entry_at))); }
+function closedTrades() { return S.trades.filter((t) => t.status === "closed" && num(t.exit_price) !== null).sort((a, b) => String(a.exit_at).localeCompare(String(b.exit_at))); }
+function funds() {
+  const st = settings(); const hasInitial = S.ledger.some((l) => l.type === "initial");
+  const parts = { initial: hasInitial ? 0 : num(st.initial_balance) || 0, deposit: 0, withdrawal: 0, pnl: 0 };
+  for (const l of S.ledger) if (l.type in parts) parts[l.type] += num(l.amount) || 0;
+  const capital = parts.initial + parts.deposit + parts.withdrawal + parts.pnl;
+  const open = openTrades(); const marks = latestMarks();
+  const openCost = open.reduce((s, t) => s + (num(t.entry_price) || 0) * (num(t.qty) || 0) + (num(t.fee_in) || 0), 0);
+  const unreal = open.reduce((s, t) => { const last = num(marks[t.id]?.last); return s + (last !== null ? (last - num(t.entry_price)) * num(t.qty) - (num(t.fee_in) || 0) : 0); }, 0);
+  return { ...parts, capital, openCost, cash: capital - openCost, unreal, equity: capital + unreal, open };
+}
+function statsOf(list) {
+  const n = list.length; if (!n) return { n: 0 };
+  const pnl = list.reduce((s, t) => s + (num(t.pnl) || 0), 0);
+  const wins = list.filter((t) => num(t.pnl) > 0), losses = list.filter((t) => num(t.pnl) <= 0);
+  const gw = wins.reduce((s, t) => s + num(t.pnl), 0), gl = -losses.reduce((s, t) => s + (num(t.pnl) || 0), 0);
+  return { n, pnl, wins: wins.length, winRate: (100 * wins.length) / n, pf: gl > 0 ? gw / gl : null, avgWin: wins.length ? gw / wins.length : 0, avgLoss: losses.length ? -gl / losses.length : 0,
+    avgPct: list.reduce((s, t) => s + (num(t.pnl_pct) || 0), 0) / n, avgHold: list.reduce((s, t) => s + (num(t.days_held) || 0), 0) / n, fees: list.reduce((s, t) => s + (num(t.fee_in) || 0) + (num(t.fee_out) || 0), 0) };
+}
+function holdEnd(t) { const at = new Date(t.entry_at || t.created_at || Date.now()); const day0 = Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()); return day0 + (num(t.hold_max_days) || 7) * 86400000; }
+function latestScan(withMarket) { return S.scans.find((x) => (withMarket ? x.market : true)); }
+
+// ---------------------------------------------------------------- shell
+function renderTabs() {
+  const n = S.alerts.filter((a) => entryLive(a) && a.status === "new" && !a.also_qualified).length + toResolve().length + exitAlerts().length;
+  $("#tabs").innerHTML = TABS.map(([k, l]) => `<button role="tab" type="button" id="tab-${k}" aria-selected="${S.tab === k}" data-tab="${k}">${l}${k === "alerts" && n ? `<span class="count">${n}</span>` : ""}</button>`).join("");
+}
+function renderChips() {
+  const f = funds(), st = settings(), last = S.scans[0], m = latestScan(true)?.market;
+  const age = last ? Date.now() - Date.parse(last.started_at) : null;
+  const scanPill = !last ? pill("neutral", "No scans yet") : pill(last.status === "ok" ? (age > 14 * 3600000 ? "warn" : "good") : "warn", `${last.mode === "close" ? "Daily close" : "Check"} · ${dtPT(last.started_at)}`);
+  $("#chips").innerHTML = `
+    <div class="chip"><span class="k">Capital</span><span class="v">${money(f.capital)}</span></div>
+    <div class="chip"><span class="k">Cash free</span><span class="v">${money(f.cash)}</span></div>
+    <div class="chip"><span class="k">Open</span><span class="v">${f.open.length}/${esc(st.max_open_positions)}</span></div>
+    <div class="chip"><span class="k">Market</span><span class="v" style="font-family:var(--f-body);font-size:13px">${m ? pill(m.bull ? (m.stress ? "warn" : "good") : (m.stress ? "crit" : "neutral"), m.label) : pill("neutral", "–")}</span></div>
+    <div class="chip"><span class="k">Last scan</span><span class="v" style="font-family:var(--f-body);font-size:13px">${scanPill}</span></div>`;
+  const b = $("#scanBtn"); const tid = st.manual_trigger_id;
+  b.disabled = !tid || !S.mcp || S.starting; b.textContent = S.starting ? "Starting…" : "Scan now";
+  b.title = !tid ? "Scan now turns on once the scheduled scans are set up." : !S.mcp ? "Open this page in claude.ai to start a scan from here." : "Run a position check and scan now";
+}
+function render() {
+  renderTabs(); renderChips();
+  const m = $("#main");
+  const banner = S.dbError ? `<div class="banner crit">${esc(S.dbError)}</div>` : "";
+  const v = { overview: viewOverview, alerts: viewAlerts, log: viewLog, funds: viewFunds, scans: viewScans, lab: viewLab }[S.tab]();
+  m.innerHTML = banner + v + `<p class="disclaimer">Signals come from rules-based models tested on historical data. They are not personalized financial advice, and win percentages are estimates that can be wrong. Crypto is volatile and trades around the clock: a stop order can fill far from its price in a fast move. You place and manage every order yourself.</p>`;
+  hooks.splice(0).forEach((h) => { try { h(); } catch (e) { console.error(e); } });
+  tick();
+}
+const hooks = [];
+// countdowns: every element with data-until / data-from is refreshed each 30 s without re-rendering the page
+function tick() {
+  document.querySelectorAll("[data-count]").forEach((el) => {
+    const from = el.dataset.from ? Date.parse(el.dataset.from) : null, until = Date.parse(el.dataset.until), now = Date.now();
+    const kind = el.dataset.count; let html, cls = "";
+    if (kind === "order") {
+      if (from && now < from) html = `Order window opens in <b>${span(from - now)}</b> (${dtPT(el.dataset.from)}) and runs to ${dtPT(el.dataset.until)}`;
+      else if (now < until) { html = `Time left to fill: <b>${span(until - now)}</b> · the order expires ${dtPT(el.dataset.until)}`; if (until - now < 3 * 3600000) cls = "urgent"; }
+      else { html = `Order window ended ${dtPT(el.dataset.until)}`; cls = "over"; }
+    } else {
+      if (now < until) { html = `Time left to hold: <b>${span(until - now)}</b> · sell by ${dtPT(el.dataset.until)} if neither level is hit`; if (until - now < 24 * 3600000) cls = "urgent"; }
+      else { html = `Time is up (since ${dtPT(el.dataset.until)}): sell at market`; cls = "over"; }
+    }
+    el.innerHTML = html; el.className = "count-strip " + cls;
+  });
+  const c = $("#utcClock"); if (c) { const now = new Date(); const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1); c.textContent = span(next - now); }
+}
+setInterval(tick, 30000);
+
+// ---------------------------------------------------------------- overview
+function attention() {
+  let out = "";
+  const ex = exitAlerts(), res = toResolve();
+  if (ex.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Action needed: ${ex.map((a) => `${esc(a.ticker)} ${esc(String(a.label || "").split(":")[0].toLowerCase())}`).join(", ")}.</b> <button class="btn small" type="button" data-tab="alerts">Open alerts</button></div>`;
+  if (res.length) out += `<div class="banner info" style="margin-bottom:12px"><b>${res.map((a) => esc(a.ticker)).join(", ")}: did ${res.length === 1 ? "this order" : "these orders"} fill?</b> The order window is over. Record the result so the desk watches the position. <button class="btn small" type="button" data-tab="alerts">Answer</button></div>`;
+  const last = S.scans[0];
+  if (last && Date.now() - Date.parse(last.started_at) > 26 * 3600000) out += `<div class="banner warn" style="margin-bottom:12px"><b>No scan in over a day</b> (last: ${dtPT(last.started_at)}). Open positions are not being checked. Press Scan now, or open the Crypto Swing Desk chat.</div>`;
+  if (last?.data?.status && last.data.status !== "ok") out += `<div class="banner warn" style="margin-bottom:12px"><b>Prices were behind at the last scan.</b> ${esc((last.data.notes || []).join(" "))}</div>`;
+  if (last?.run_issues?.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Problem in the last scan:</b> ${last.run_issues.map(esc).join(" ")}</div>`;
+  return out;
+}
+function marketPanel() {
+  const sc = latestScan(true); if (!sc) return `<div class="empty"><b>No scans have run yet.</b> The first scan writes the market condition, A+ setups and position checks here.</div>`;
+  const m = sc.market, P = S.params, T = P?.grade_table || {}, specs = S.backtest?.strategies || {};
+  const here = Object.keys(T).filter((s) => P.strategies?.[s]?.enabled && T[s][m.condition] && (!(P.strategies[s].market_conditions || []).length || P.strategies[s].market_conditions.includes(m.condition)))
+    .map((s) => ({ s, c: T[s][m.condition] })).sort((a, b) => b.c.p - a.c.p);
+  const ap = here.filter((x) => x.c.grade === "A+");
+  return `<div class="panel"><div class="grid g-kpi" style="margin-bottom:10px">
+    ${kpi("Market condition", esc(m.label), m.bull ? "Bitcoin above its 200-day average" : "Bitcoin below its 200-day average")}
+    ${kpi("Bitcoin", m.btc ? "$" + Math.round(m.btc).toLocaleString("en-US") : "–", `${spct(m.btc_vs_200d_pct)} vs 200-day · ${spct(m.btc_7d_pct)} in 7 days`)}
+    ${kpi("Breadth", m.breadth_above_50d_pct != null ? pct(m.breadth_above_50d_pct, 0) : "–", "Liquid coins above their 50-day")}
+    ${kpi("Fear & Greed", m.fear_greed != null ? esc(m.fear_greed) : "–", m.fear_greed == null ? "" : m.fear_greed <= 25 ? "Extreme fear" : m.fear_greed <= 45 ? "Fear" : m.fear_greed < 55 ? "Neutral" : m.fear_greed < 75 ? "Greed" : "Extreme greed")}
+    ${kpi("A+ strategies here", String(ap.length), ap.length ? ap.map((x) => esc(specs[x.s]?.label || x.s)).join(", ") : "None has an A+ record in this condition")}
+  </div><div class="small muted">${esc(m.rule || "")} As of the ${dtPT(sc.started_at)} scan · ${esc(sc.data?.tradable ?? "–")} tradable coins · daily bar closes in <span class="clock" id="utcClock">–</span> (4:00 PM PT in winter, 5:00 PM in summer).</div></div>`;
+}
+function viewOverview() {
+  const f = funds(), st = settings(), all = closedTrades(), hist = statsOf(all);
+  const month = todayPT().slice(0, 7), mtd = statsOf(all.filter((t) => fmtDay.format(new Date(t.exit_at)).slice(0, 7) === month));
+  const ret = f.capital - f.initial - f.deposit - f.withdrawal;
+  const live = S.alerts.filter((a) => entryLive(a) && !a.also_qualified);
+  let h = attention() + `<section class="section"><div class="section-head"><h2>Account</h2><span class="meta">Started with ${money(st.initial_balance)} · ${esc(st.exchange)} · fees ${esc(st.maker_fee_pct)}% maker / ${esc(st.taker_fee_pct)}% taker</span></div>
+  <div class="grid g-kpi">
+    ${kpi("Trading capital", money(f.capital), `Equity incl. open P&L ${money(f.equity)}`)}
+    ${kpi("Cash free for new trades", money(f.cash), `${money(f.openCost)} in ${f.open.length} open position${f.open.length === 1 ? "" : "s"}`)}
+    ${kpi("Net result after fees", `<span class="${signCls(ret)}">${smoney(ret)}</span>`, f.initial + f.deposit ? `${spct((100 * ret) / (f.initial + f.deposit))} on money put in` : "")}
+    ${kpi("Win rate", hist.n ? pct(hist.winRate) : "–", hist.n ? `${hist.wins} of ${hist.n} closed trades` : "No closed trades yet")}
+    ${kpi("Profit factor", hist.pf ? hist.pf.toFixed(2) : hist.n ? "∞" : "–", "Gross wins ÷ gross losses")}
+    ${kpi("Open P&L", `<span class="${signCls(f.unreal)}">${smoney(f.unreal)}</span>`, "At the last scan's prices, entry fees included")}
+  </div></section>
+  <section class="section"><div class="section-head"><h2>Market now</h2><span class="meta">The condition decides which strategies may trade</span></div>${marketPanel()}</section>
+  <section class="section"><div class="section-head"><h2>A+ setups live</h2><span class="meta">${live.length ? "Full order tickets are on the Alerts tab" : ""}</span></div>
+    ${live.length ? `<div class="tbl-wrap"><table><thead><tr><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Buy limit</th><th class="n">Stop</th><th class="n">Target</th><th class="n">Size</th><th>Time left to fill</th><th></th></tr></thead><tbody>
+      ${live.map((a) => `<tr><td><span class="t">${esc(a.ticker)}</span></td><td class="small">${esc(a.strategy_label)}</td><td class="n">${pct(a.win_pct, 0)}</td><td class="n">${fp(a.entry)}</td><td class="n">${fp(a.stop)}</td><td class="n">${fp(a.target)}</td><td class="n">${money(a.total_cost)}</td>
+        <td class="small">${windowOpen(a) ? span(Date.parse(a.valid_until) - Date.now()) + " left" : "opens " + dtPT(a.valid_from)}${a.status === "placed" ? " · " + pill("info", "placed") : ""}</td><td><button class="btn small" type="button" data-tab="alerts">Open</button></td></tr>`).join("")}</tbody></table></div>`
+      : `<div class="empty"><b>No A+ setup is live.</b> New setups land right after the daily bar closes (4:00 PM PT in winter). A day with none means nothing cleared the bar in this market condition, and sitting out is the trade.</div>`}</section>`;
+  h += positionsSection();
+  h += `<section class="section"><div class="section-head"><h2>Performance</h2><span class="meta">Your real fills, after fees</span></div>
+    <div class="grid g-kpi">
+      ${kpi("This month", `<span class="${signCls(mtd.pnl)}">${smoney(mtd.pnl || 0)}</span>`, mtd.n ? `${mtd.wins}/${mtd.n} won` : "No closed trades this month")}
+      ${kpi("All time", `<span class="${signCls(hist.pnl)}">${smoney(hist.pnl || 0)}</span>`, hist.n ? `${hist.n} closed trades` : "")}
+      ${kpi("Avg win / avg loss", hist.n ? `${money(hist.avgWin, 0)} / ${money(hist.avgLoss, 0)}` : "–", hist.n ? `Average trade ${spct(hist.avgPct)}` : "")}
+      ${kpi("Avg hold", hist.n ? hist.avgHold.toFixed(1) + " days" : "–", "")}
+      ${kpi("Fees paid", hist.n ? money(hist.fees) : "–", "Entry and exit fees on closed trades")}
+    </div>
+    <div class="panel"><div class="section-head"><h3>Trading capital over time</h3><span class="meta">Every deposit, withdrawal and closed trade</span></div><div class="chart" id="eqChart"></div></div>
+    ${monthlyTable(all)}</section>
+  <section class="section"><div class="section-head"><h2>By strategy</h2><span class="meta">Your real fills</span></div>${strategyTable(all)}</section>`;
+  hooks.push(drawEquity);
+  return h;
+}
+function monthlyTable(all) {
+  const by = {}; for (const t of all) { const k = fmtDay.format(new Date(t.exit_at)).slice(0, 7); (by[k] = by[k] || []).push(t); }
+  const keys = Object.keys(by).sort().reverse();
+  if (!keys.length) return `<div class="empty"><b>Monthly results appear after your first closed trade.</b> Press Filled on an alert when your order fills, then record the sale on the position card.</div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Month</th><th class="n">Trades</th><th class="n">Win rate</th><th class="n">Net P&L</th><th class="n">Profit factor</th><th class="n">Fees</th></tr></thead><tbody>
+  ${keys.map((k) => { const s = statsOf(by[k]); return `<tr><td>${new Date(k + "-15T12:00:00Z").toLocaleDateString("en-US", { month: "long", year: "numeric" })}</td><td class="n">${s.n}</td><td class="n">${pct(s.winRate)}</td><td class="n ${signCls(s.pnl)}">${smoney(s.pnl)}</td><td class="n">${s.pf ? s.pf.toFixed(2) : "∞"}</td><td class="n">${money(s.fees)}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+function strategyTable(all) {
+  const by = {}; for (const t of all) { const k = t.strategy_label || t.strategy || "Manual"; (by[k] = by[k] || []).push(t); }
+  const keys = Object.keys(by);
+  if (!keys.length) return `<div class="empty">Per-strategy results fill in as trades close. Backtest results for every strategy are in the Strategy lab tab.</div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Strategy</th><th class="n">Trades</th><th class="n">Win rate</th><th class="n">Avg trade</th><th class="n">Net P&L</th></tr></thead><tbody>
+  ${keys.map((k) => { const s = statsOf(by[k]); return `<tr><td>${esc(k)}</td><td class="n">${s.n}</td><td class="n">${pct(s.winRate)}</td><td class="n">${spct(s.avgPct)}</td><td class="n ${signCls(s.pnl)}">${smoney(s.pnl)}</td></tr>`; }).join("")}</tbody></table></div>`;
+}
+function drawEquity() {
+  const el = $("#eqChart"); if (!el) return; const st = settings();
+  const ev = S.ledger.map((l) => ({ t: Date.parse(l.at || (String(l.date || "").slice(0, 10) + "T12:00:00Z")), amt: num(l.amount) || 0 })).filter((e) => Number.isFinite(e.t));
+  if (!S.ledger.some((l) => l.type === "initial")) ev.push({ t: Date.parse(S.settings?.created_at || nowIso()), amt: num(st.initial_balance) || 0 });
+  ev.sort((a, b) => a.t - b.t); let bal = 0; const pts = ev.map((e) => ({ t: e.t, v: (bal += e.amt) })); if (pts.length) pts.push({ t: Date.now(), v: bal });
+  if (pts.length < 3) { el.innerHTML = `<div class="empty small">The curve starts with the first closed trade. Starting capital: ${money(st.initial_balance)}.</div>`; return; }
+  const W = 900, H = 220, L = 60, R = 12, T = 10, B = 26, t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  const vs = pts.map((p) => p.v), lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo || 100) * 0.1, y0 = lo - pad, y1 = hi + pad;
+  const X = (t) => L + ((t - t0) / Math.max(1, t1 - t0)) * (W - L - R), Y = (v) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+  let path = ""; pts.forEach((p, i) => { path += i === 0 ? `M${X(p.t)},${Y(p.v)}` : `H${X(p.t)}V${Y(p.v)}`; });
+  const ticks = [y0 + (y1 - y0) * 0.1, (y0 + y1) / 2, y1 - (y1 - y0) * 0.1], dl = (t) => new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Trading capital over time"><g class="grid">${ticks.map((t) => `<line x1="${L}" x2="${W - R}" y1="${Y(t)}" y2="${Y(t)}"/>`).join("")}</g>
+    ${ticks.map((t) => `<text x="${L - 8}" y="${Y(t) + 3.5}" text-anchor="end">$${Math.round(t).toLocaleString()}</text>`).join("")}
+    <text x="${L}" y="${H - 6}">${dl(t0)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">${dl(t1)}</text>
+    <path d="${path}V${Y(y0)}H${X(t0)}Z" fill="var(--series-soft)"/><path d="${path}" fill="none" stroke="var(--series)" stroke-width="2"/>
+    <circle cx="${X(t1)}" cy="${Y(bal)}" r="4" fill="var(--series)" stroke="var(--surface)" stroke-width="2"/></svg>`;
+}
+
+// ---------------------------------------------------------------- alerts
+function ladderSvg(a) {
+  const e = num(a.entry), s = num(a.stop), t = num(a.target); if (e === null || s === null || t === null || t <= s) return "";
+  const H = 116, top = 8, bot = H - 8, Y = (v) => top + (1 - (v - s) / (t - s)) * (bot - top);
+  return `<svg class="ladder" viewBox="0 0 34 ${H}" role="img" aria-label="Stop ${fp(s)}, entry ${fp(e)}, target ${fp(t)}">
+    <rect x="13" y="${Y(t)}" width="8" height="${Math.max(2, Y(e) - Y(t))}" rx="2" fill="var(--series)"/><rect x="13" y="${Y(e) + 2}" width="8" height="${Math.max(2, Y(s) - Y(e) - 2)}" rx="2" fill="var(--loss)" opacity=".85"/>
+    <line x1="6" x2="28" y1="${Y(e)}" y2="${Y(e)}" stroke="var(--ink)" stroke-width="2"/></svg>`;
+}
+function ticket(a) {
+  const news = a.news?.verdict && a.news.verdict !== "unchecked" ? `<div><b>News check:</b> ${a.news.verdict === "clean" ? "clean" : `<b class="caution-word">${esc(a.news.verdict)}</b>`}${a.news.reason ? " · " + esc(a.news.reason) : ""}</div>` : `<div class="muted"><b>News check:</b> not run yet</div>`;
+  const market = a.entry_kind === "open_next";
+  return `<article class="ticket ${a.also_qualified ? "overcap" : ""}" aria-label="${esc(a.ticker)} setup">
+    <div class="t-head"><div class="stamp" aria-label="Grade ${esc(a.grade)}">${esc(a.grade || "A+")}</div><div class="t-title"><div class="tk">${esc(a.ticker)}</div><div class="nm">${esc(a.product || "")} · ${a.is_major ? "major" : "alt"}</div>
+      <div class="st">${a.rank ? `#${esc(a.rank)} · ` : ""}${esc(a.strategy_label)} · ${esc(a.family || "")}</div></div>
+      <div class="t-odds"><div class="lbl">Win est.</div><div class="big">${pct(a.win_pct, 0)}</div><div class="lbl">Score ${esc(a.score)}</div></div></div>
+    <div class="t-body">${ladderSvg(a)}<div class="levels">
+      <span class="lk">Target</span><span class="lv">${fp(a.target)}</span><span class="ld">${spct(a.target_pct)}</span>
+      <span class="lk">${market ? "Buy at market" : "Buy limit"}</span><span class="lv">${fp(a.entry)}</span><span class="ld">${a.last ? `last ${fp(a.last)}` : ""}</span>
+      <span class="lk">Stop loss</span><span class="lv">${fp(a.stop)}</span><span class="ld">${spct(a.stop_pct)}</span>
+      <span class="lk">R:R</span><span class="lv" style="font-size:13px">${esc(a.rr)}</span><span class="ld">after fees</span>
+    </div></div>
+    <div class="t-facts"><div><div class="k">Size</div><div class="v">${qty(a.qty)} ${esc(a.ticker)}</div></div><div><div class="k">Cost</div><div class="v">${money(a.total_cost)}</div></div><div><div class="k">Hold</div><div class="v">≤ ${esc(a.hold_max_days)} days</div></div></div>
+    <div class="count-strip" data-count="order" data-from="${esc(a.valid_from)}" data-until="${esc(a.valid_until)}"></div>
+    <div class="t-notes">
+      <div><b>Order:</b> ${esc(a.order)}</div>
+      <div><b>After it fills:</b> ${esc(a.after_fill)}</div>
+      <div><b>Risk:</b> ${money(a.risk_usd)} if stopped, fees included (${esc(a.pct_of_capital)}% of capital in the position) · net ${spct(a.net_win_pct)} at target, ${spct(a.net_loss_pct)} at stop</div>
+      <div><b>Market:</b> ${esc(COND[a.condition] || a.condition)} · signal from the ${dPT(a.signal_date)} daily bar</div>
+      ${news}
+      ${Array.isArray(a.why) && a.why.length ? `<details><summary>Why it qualifies</summary><ul>${a.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
+    </div>
+    ${a.withdrawn ? `<div class="note-strip" style="background:var(--crit-bg);color:var(--crit)"><b>Withdrawn:</b> ${esc(a.withdrawn_reason || "a later scan dropped this setup.")} ${a.status === "placed" ? "Cancel the order on your exchange, then press Cancelled." : ""}</div>` : ""}
+    ${a.note ? `<div class="note-strip">${esc(a.note)}</div>` : ""}${a.capacity_note ? `<div class="note-strip">${esc(a.capacity_note)}</div>` : ""}
+    ${a.status === "placed" ? `<div class="note-strip">Order placed ${dtPT(a.placed_at)}. Press Filled as soon as it fills so the desk starts watching the position.</div>` : ""}
+    <div class="t-actions">
+      <button class="btn primary small" type="button" data-act="fill" data-id="${esc(a.id)}">Filled</button>
+      ${a.status !== "placed" ? `<button class="btn small" type="button" data-act="placed" data-id="${esc(a.id)}">Order placed</button>` : `<button class="btn small" type="button" data-act="nofill" data-id="${esc(a.id)}">Didn't fill</button>`}
+      <button class="btn ghost small" type="button" data-act="copy" data-id="${esc(a.id)}">Copy</button>
+      ${a.status !== "placed" ? `<button class="btn ghost small" type="button" data-act="skip" data-id="${esc(a.id)}">Skip</button>` : `<button class="btn ghost small" type="button" data-act="cancelled" data-id="${esc(a.id)}">Cancelled</button>`}
+    </div></article>`;
+}
+function resolveCard(a) {
+  const fc = fillCheckMap()[a.id];
+  return `<div class="act info"><div class="tk">${esc(a.ticker)}</div><div><div class="what">Did your buy limit at ${fp(a.entry)} fill?</div>
+    <div class="why">${fc ? esc(fc.text) : "The order window ended " + dtPT(a.valid_until) + ". The next scan checks the low against your limit."}</div></div>
+    <div class="btns"><button class="btn primary small" type="button" data-act="fill" data-id="${esc(a.id)}">Yes, filled</button><button class="btn small" type="button" data-act="nofill" data-id="${esc(a.id)}">No</button></div></div>`;
+}
+function exitCard(a) {
+  const t = S.trades.find((x) => x.id === a.trade_id); const tone = a.code === "TARGET_HIT" ? "good" : a.code === "RAISE_STOP" ? "info" : "alert";
+  return `<div class="act ${tone}"><div class="tk">${esc(a.ticker)}</div><div><div class="what">${esc(a.label)}</div><div class="why">${esc(a.detail)}</div><div class="small muted">From the ${dtPT(a.created_at)} scan</div></div>
+    <div class="btns">${a.code === "RAISE_STOP" ? `<button class="btn primary small" type="button" data-act="applystop" data-id="${esc(a.id)}">Stop moved to ${fp(a.new_stop)}</button>` : t ? `<button class="btn primary small" type="button" data-act="close" data-tid="${esc(t.id)}" data-code="${esc(a.code)}" data-aid="${esc(a.id)}">Record the sale</button>` : ""}
+    <button class="btn ghost small" type="button" data-act="dismiss" data-id="${esc(a.id)}">Dismiss</button></div></div>`;
+}
+function positionCard(t, m) {
+  const entry = num(t.entry_price), q = num(t.qty), last = num(m?.last), end = holdEnd(t);
+  const pnl = last !== null ? (last - entry) * q - (num(t.fee_in) || 0) : null, pp = last !== null && entry ? (100 * (last - entry)) / entry : null;
+  const day = Math.max(1, Math.ceil((Date.now() - (end - (num(t.hold_max_days) || 7) * 86400000)) / 86400000));
+  const tone = { sell: "st-sell", good: "st-good", act: "st-act" }[m?.tone] || "";
+  const status = m ? `<div class="pc-status ${tone}" role="status"><div class="k">Status · what to do now</div><div class="lbl">${esc(m.label)}</div><div class="det">${esc(m.detail || "")}</div>
+      ${m.code === "RAISE_STOP" && m.new_stop ? `<div class="pc-st-act"><button class="btn primary small" type="button" data-act="cardstop" data-tid="${esc(t.id)}" data-px="${m.new_stop}">Stop moved to ${fp(m.new_stop)}</button><span class="small muted">Press after you change it on your exchange.</span></div>` : ""}
+      <div class="small muted">From the ${dtPT(m.scan_at)} scan; every scan updates it.</div></div>`
+    : `<div class="pc-status"><div class="k">Status · what to do now</div><div class="lbl">HOLD</div><div class="det">Keep your stop at ${fp(t.stop)} and your limit sell at ${fp(t.target)} resting on the exchange. The next scan checks this position.</div></div>`;
+  const lvl = (k, v, s) => `<div><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s || "&nbsp;"}</div></div>`;
+  return `<article class="pos-card" id="pos-${kid(t.id)}" aria-label="${esc(t.ticker)} position">
+    <div class="pc-head"><div class="pc-title"><div class="tk">${esc(t.ticker)}</div><div class="st">${t.grade ? `<span class="gchip aplus">${esc(t.grade)}</span>` : ""}${esc(t.strategy_label || t.strategy || "Manual")} · entered ${dtPT(t.entry_at)}</div></div>
+      <div class="pc-pnl"><div class="lbl">Open P&L</div><div class="big ${signCls(pnl)}">${pnl !== null ? smoney(pnl) : "–"}</div><div class="lbl">${pp !== null ? `<span class="${signCls(pp)}">${spct(pp)}</span> · last ${fp(last)}` : "no price yet"}</div></div></div>
+    ${status}
+    <div class="pc-levels">${lvl("Entry", fp(entry), `${qty(q)} ${esc(t.ticker)}`)}${lvl("Stop loss", fp(t.stop), entry ? spct((100 * (num(t.stop) - entry)) / entry) : "")}${lvl("Target", fp(t.target), entry ? spct((100 * (num(t.target) - entry)) / entry) : "")}${lvl("Hold day", `${Math.min(day, num(t.hold_max_days) || 7)} of ${esc(t.hold_max_days || 7)}`, `cost ${money(entry * q)}`)}</div>
+    <div class="count-strip" data-count="hold" data-until="${new Date(end).toISOString()}"></div>
+    <div class="pc-signals"><div class="small"><b>Exit rule:</b> ${esc(t.exit_signal || "Target, stop or the time limit.")}</div></div>
+    <div class="pc-actions"><button class="btn primary small" type="button" data-act="close" data-tid="${esc(t.id)}">Record a sale</button><button class="btn ghost small" type="button" data-act="edit" data-tid="${esc(t.id)}">Edit position</button></div>
+  </article>`;
+}
+function positionsSection() {
+  const open = openTrades(), marks = latestMarks();
+  return `<section class="section"><div class="section-head"><h2>Open positions</h2><span class="meta">${open.length} of ${esc(settings().max_open_positions)} slots · stop, target and time left on every card</span></div>
+    ${open.length ? `<div class="grid g-pos">${open.map((t) => positionCard(t, marks[t.id])).join("")}</div>` : `<div class="empty">No open positions. When an order fills, press <b>Filled</b> on its alert and it appears here with its stop, target and countdown.</div>`}</section>`;
+}
+function viewAlerts() {
+  const st = settings(), f = funds(), res = toResolve(), ex = exitAlerts();
+  const live = S.alerts.filter(entryLive).sort((a, b) => (num(a.rank) ?? 99) - (num(b.rank) ?? 99));
+  const feat = live.filter((a) => !a.also_qualified), extra = live.filter((a) => a.also_qualified);
+  const sc = S.scans.find((x) => x.mode === "close");
+  let h = res.length ? `<section class="section"><div class="section-head"><h2>Did these orders fill?</h2><span class="meta">Their order windows are over</span></div><div class="grid">${res.map(resolveCard).join("")}</div></section>` : "";
+  h += `<section class="section"><div class="section-head"><h2>Action needed on open positions</h2><span class="meta">Sell, confirm a fill or raise a stop</span></div>
+    ${ex.length ? `<div class="grid">${ex.map(exitCard).join("")}</div>` : `<div class="empty">No open position needs action right now. Every scan re-checks each position against its stop, target, exit signal and time limit.</div>`}</section>
+  <section class="section"><div class="section-head"><h2>New A+ opportunities</h2><span class="meta">${Math.max(0, st.max_open_positions - f.open.length)} of ${esc(st.max_open_positions)} slots free · ${money(f.cash)} cash</span></div>
+    ${feat.length ? `<div class="grid g-tickets">${feat.map(ticket).join("")}</div>` : `<div class="empty"><b>No open A+ setups.</b> ${sc ? `The ${dtPT(sc.started_at)} daily-close scan found none that clear the bar in a ${esc((sc.market?.label || "").toLowerCase())}.` : ""} New setups land right after each daily close, ready to place as limit orders. If a day has none, that is the filter doing its job.</div>`}
+    ${extra.length ? `<details class="panel"><summary>Also qualified (${extra.length}): A+ setups without a free slot or cash today</summary><div class="grid g-tickets" style="margin-top:10px">${extra.map(ticket).join("")}</div></details>` : ""}
+    ${sc?.watchlist?.length ? `<details class="panel"><summary>Watchlist (${sc.watchlist.length}): grade A setups, not sent as alerts</summary><div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Entry</th><th class="n">Stop</th><th class="n">Target</th><th class="n">R:R</th></tr></thead><tbody>
+      ${sc.watchlist.map((x) => `<tr><td><span class="t">${esc(x.ticker)}</span></td><td class="small">${esc(x.strategy_label)}</td><td class="n">${pct(x.win_pct, 0)}</td><td class="n">${fp(x.entry)}</td><td class="n">${fp(x.stop)}</td><td class="n">${fp(x.target)}</td><td class="n">${esc(x.rr)}</td></tr>`).join("")}</tbody></table></div><p class="small muted">Grade A means 58%+ in this market condition but short of the A+ bar. They are graded on paper so the desk learns whether the bar is in the right place.</p></details>` : ""}
+  </section>` + positionsSection();
+  const recent = S.alerts.filter((a) => a.type === "entry" && !entryLive(a) && !(a.status === "placed" && windowOver(a))).slice(0, 20);
+  if (recent.length) h += `<section class="section"><details><summary>Recently handled setups (${recent.length})</summary><div class="tbl-wrap" style="margin-top:8px"><table><thead><tr><th>Signal</th><th>Coin</th><th>Strategy</th><th class="n">Win est.</th><th class="n">Entry</th><th>Result</th></tr></thead><tbody>
+    ${recent.map((a) => { const g = S.learning.stats?.alerts?.[a.id]; const s = a.status === "new" ? (a.withdrawn ? "withdrawn" : "expired") : a.status;
+      return `<tr><td>${dPT(a.signal_date)}</td><td><span class="t">${esc(a.ticker)}</span></td><td class="small">${esc(a.strategy_label)}</td><td class="n">${pct(a.win_pct, 0)}</td><td class="n">${fp(a.entry)}</td><td>${pill({ filled: "good", skipped: "neutral", expired: "neutral", withdrawn: "crit", unfilled: "neutral", cancelled: "neutral" }[s] || "neutral", s)}
+        ${g?.state === "closed" ? `<span class="small muted"> on paper: <span class="${signCls(g.ret)}">${spct(100 * g.ret)}</span> (${esc(g.reason)})</span>` : g?.state === "unfilled" ? `<span class="small muted"> on paper: never filled</span>` : ""}</td></tr>`; }).join("")}</tbody></table></div></details></section>`;
+  return h;
+}
+
+// ---------------------------------------------------------------- log / funds / scans
+function viewLog() {
+  const all = closedTrades().reverse();
+  return `<section class="section"><div class="section-head"><h2>Trade log</h2><span class="meta">${all.length} closed trade${all.length === 1 ? "" : "s"} · P&L after fees</span></div>
+  ${all.length ? `<div class="tbl-wrap"><table><thead><tr><th>Sold</th><th>Coin</th><th>Strategy</th><th class="n">Qty</th><th class="n">Entry</th><th class="n">Exit</th><th class="n">Net P&L</th><th class="n">%</th><th class="n">Days</th><th>Reason</th></tr></thead><tbody>
+    ${all.map((t) => `<tr><td>${dtPT(t.exit_at)}</td><td><span class="t">${esc(t.ticker)}</span></td><td class="small">${esc(t.strategy_label || t.strategy || "Manual")}</td><td class="n">${qty(t.qty)}</td><td class="n">${fp(t.entry_price)}</td><td class="n">${fp(t.exit_price)}</td><td class="n ${signCls(t.pnl)}">${smoney(t.pnl)}</td><td class="n ${signCls(t.pnl)}">${spct(t.pnl_pct)}</td><td class="n">${esc(t.days_held ?? "–")}</td><td class="small">${esc(t.exit_reason || "")}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty"><b>No closed trades yet.</b> Each sale you record on a position card lands here with its fees and net result, and feeds the win rate, the risk governor and the daily learning review.</div>`}</section>`;
+}
+function viewFunds() {
+  const f = funds(), st = settings();
+  const led = [...S.ledger].sort((a, b) => String(b.at || b.date).localeCompare(String(a.at || a.date)));
+  return `<section class="section"><div class="section-head"><h2>Funds</h2><span class="meta">Position sizes follow trading capital</span></div>
+    <div class="grid g-kpi">${kpi("Starting balance", money(f.initial || st.initial_balance))}${kpi("Deposits", money(f.deposit))}${kpi("Withdrawals", money(-f.withdrawal))}${kpi("Realized P&L", `<span class="${signCls(f.pnl)}">${smoney(f.pnl)}</span>`)}${kpi("Trading capital", money(f.capital))}</div>
+    <div class="grid g-2"><div class="panel"><h3>Add or remove funds</h3><form class="form" id="fundsForm" style="margin-top:10px"><div class="row">
+        <label class="f" for="fType">Type<select id="fType"><option value="deposit">Deposit</option><option value="withdrawal">Withdrawal</option></select></label>
+        <label class="f" for="fAmt">Amount ($)<input id="fAmt" type="number" min="0" step="0.01" inputmode="decimal" required></label>
+        <label class="f" for="fNote">Note<input id="fNote" type="text" maxlength="120"></label></div><div><button class="btn primary" type="submit">Save</button></div></form></div>
+      <div class="panel"><h3>Desk settings</h3><form class="form" id="setForm" style="margin-top:10px"><div class="row">
+        <label class="f" for="sInit">Starting balance ($)<input id="sInit" type="number" min="0" step="0.01" value="${esc(st.initial_balance)}"></label>
+        <label class="f" for="sMax">Max open positions<input id="sMax" type="number" min="1" max="10" step="1" value="${esc(st.max_open_positions)}"></label>
+        <label class="f" for="sRisk">Risk per trade (% of capital)<input id="sRisk" type="number" min="0.1" max="5" step="0.05" value="${esc(st.risk_pct)}"></label>
+        <label class="f" for="sPos">Max position (% of capital)<input id="sPos" type="number" min="5" max="100" step="1" value="${esc(st.max_position_pct)}"></label>
+        <label class="f" for="sMk">Maker fee (%)<input id="sMk" type="number" min="0" max="3" step="0.01" value="${esc(st.maker_fee_pct)}"></label>
+        <label class="f" for="sTk">Taker fee (%)<input id="sTk" type="number" min="0" max="3" step="0.01" value="${esc(st.taker_fee_pct)}"></label>
+        <label class="f" for="sEx">Exchange<input id="sEx" type="text" maxlength="40" value="${esc(st.exchange)}"></label></div>
+        <div class="small muted">Set the fees to your exchange's real maker and taker rates: every size, reward-to-risk figure and backtest uses them. The next scan picks up changes.</div><div><button class="btn primary" type="submit">Save settings</button></div></form></div></div>
+    <div class="tbl-wrap"><table><thead><tr><th>Date</th><th>Type</th><th class="n">Amount</th><th>Note</th></tr></thead><tbody>
+      ${led.length ? led.map((l) => `<tr><td>${dtPT(l.at || l.date)}</td><td>${esc(l.type)}</td><td class="n ${l.type === "pnl" ? signCls(l.amount) : ""}">${smoney(l.amount)}</td><td class="small">${esc(l.note || "")}</td></tr>`).join("") : `<tr><td colspan="4" class="muted">No entries yet.</td></tr>`}</tbody></table></div></section>`;
+}
+function viewScans() {
+  const st = settings(), sched = st.schedule || [];
+  return `<section class="section"><div class="section-head"><h2>Schedule</h2><span class="meta">Crypto trades every day, so the desk runs every day</span></div>
+    ${sched.length ? `<div class="tbl-wrap"><table><thead><tr><th>Run</th><th>When</th><th>What it does</th></tr></thead><tbody>${sched.map((s) => `<tr><td><b>${esc(s.name)}</b></td><td class="num" style="white-space:nowrap">${esc(s.when)}</td><td class="small">${esc(s.what)}</td></tr>`).join("")}</tbody></table></div>` : `<div class="empty">The scheduled runs are being set up.</div>`}
+    <div class="small muted">Prices: Coinbase public data, refreshed about every 15 to 60 minutes by a GitHub Action. Daily bars close at 00:00 UTC.</div></section>
+  <section class="section"><div class="section-head"><h2>Scan history</h2><span class="meta">Newest first</span></div>
+    ${S.scans.length ? S.scans.slice(0, 30).map((sc) => `<details class="panel"><summary>${dtPT(sc.started_at)} · ${sc.mode === "close" ? "Daily-close scan" : "Position check"} · ${esc(sc.headline || "")}</summary>
+      <pre class="digest">${esc(sc.digest || "")}</pre><div class="small muted">Prices as of ${dtPT(sc.data?.prices_as_of)} · last daily bar ${esc(sc.data?.last_bar || "–")} · engine ${esc(sc.engine?.fingerprint || "–")} · strategy settings v${esc(sc.params_version ?? "–")}</div></details>`).join("") : `<div class="empty">No scans yet.</div>`}</section>`;
+}
+
+// ---------------------------------------------------------------- strategy lab
+function viewLab() {
+  const B = S.backtest, P = S.params;
+  if (!B || !P) return `<section class="section"><div class="empty"><b>The first calibration is still being saved.</b> Backtests, the market-condition map and the research log appear here.</div></section>`;
+  const G = B.grading || {}, ap = G.aplus || {}, hc = G.honest_check || {}, rep = G.account_replay || {}, cond = latestScan(true)?.market?.condition;
+  const paused = S.learning.adjust?.paused || {}, strat = B.strategies || {}, T = P.grade_table || {};
+  const ids = Object.keys(strat).sort((a, b) => (strat[b].enabled - strat[a].enabled) || ((strat[b].oos?.win_rate || 0) - (strat[a].oos?.win_rate || 0)));
+  const cell = (sid, c) => { const x = T[sid]?.[c], on = strat[sid]?.enabled && (!(P.strategies?.[sid]?.market_conditions || []).length || P.strategies[sid].market_conditions.includes(c));
+    if (!x || !on) return `<td class="c off ${c === cond ? "today" : ""}">${x && x.n ? `<span title="not traded here">${Math.round(100 * x.p)}%</span>` : "–"}</td>`;
+    return `<td class="c ${x.grade === "A+" ? "ap" : x.grade === "A" ? "a" : ""} ${c === cond ? "today" : ""}">${Math.round(100 * x.p)}% <span class="small">${esc(x.grade)}</span><div class="small muted">${x.n} trades${x.live_n ? ` +${x.live_n} live` : ""}</div></td>`; };
+  let h = `<section class="section"><div class="section-head"><h2>How the desk decides</h2><span class="meta">Calibrated ${dtPT(P.calibrated_at)} on prices through ${esc(P.data_through)} · settings v${esc(P.version)}</span></div>
+    <div class="panel"><dl class="kv">
+      <dt>Data</dt><dd>${esc(B.data?.pairs)} Coinbase USD pairs since ${esc(B.data?.first_bar)}, ${esc(B.data?.liquid_today)} liquid enough to trade today. Coins that were delisted stay in the history.</dd>
+      <dt>Honest testing</dt><dd>Each strategy's settings are chosen on prices before ${esc(B.split)} only, then judged once on everything after (unseen data).</dd>
+      <dt>Costs</dt><dd>Every result is after fees: ${esc(B.costs?.maker_pct)}% on limit orders, ${esc(B.costs?.taker_pct)}% plus ${esc(B.costs?.slippage_pct)}% slippage on stops and market exits. A limit only counts as filled when price trades below it.</dd>
+      <dt>A+ rule</dt><dd>${esc(G.rule || "")}</dd>
+      <dt>Market conditions</dt><dd>${esc(B.condition_rule || "")} Share of days since ${esc(B.data?.first_bar?.slice(0, 4))}: ${COND_ORDER.map((c) => `${COND[c]} ${pct(100 * (B.condition_share?.[c] || 0), 0)}`).join(" · ")}.</dd></dl></div>
+    <div class="grid g-kpi">
+      ${kpi("A+ setups, all history", ap.trades ? pct(100 * ap.win_rate) : "–", ap.trades ? `${ap.trades} trades · avg ${spct(100 * ap.avg_ret, 2)} · PF ${esc(ap.profit_factor)}` : "No A+ trades in the backtest")}
+      ${kpi("A+ by signal day", ap.signal_days ? pct(100 * ap.day_win_rate) : "–", ap.signal_days ? `${ap.signal_days} separate days (same-day setups move together)` : "")}
+      ${kpi("Honesty check", hc.trades ? pct(100 * hc.win_rate) : "–", hc.trades ? `${hc.trades} unseen trades in cells picked from training only` : "Too few unseen trades to measure")}
+      ${kpi("$1,500 replay, unseen years", rep.unseen_only?.trades ? money(rep.unseen_only.end_capital, 0) : "–", rep.unseen_only?.trades ? `${spct(100 * rep.unseen_only.cagr)} a year · worst drop ${pct(100 * rep.unseen_only.max_dd)} · ${rep.unseen_only.per_year} trades a year` : "")}
+      ${kpi("$1,500 replay, all history", rep.full_history?.trades ? money(rep.full_history.end_capital, 0) : "–", rep.full_history?.trades ? `${spct(100 * rep.full_history.cagr)} a year · worst drop ${pct(100 * rep.full_history.max_dd)}` : "")}
+    </div>
+    ${(G.sizing || []).length ? `<div class="tbl-wrap"><table><thead><tr><th>Risk per trade (your setting: ${esc(settings().risk_pct)}%)</th>${G.sizing.map((z) => `<th class="n">${esc(z.risk_pct)}%</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Growth a year, unseen years</td>${G.sizing.map((z) => `<td class="n">${spct(100 * z.unseen_only.cagr)}</td>`).join("")}</tr><tr><td>Worst drop, unseen years</td>${G.sizing.map((z) => `<td class="n">${pct(100 * z.unseen_only.max_dd)}</td>`).join("")}</tr>
+      <tr><td>Growth a year, all history</td>${G.sizing.map((z) => `<td class="n">${spct(100 * z.full_history.cagr)}</td>`).join("")}</tr><tr><td>Worst drop, all history</td>${G.sizing.map((z) => `<td class="n">${pct(100 * z.full_history.max_dd)}</td>`).join("")}</tr>
+      <tr><td>Trades a year</td>${G.sizing.map((z) => `<td class="n">${esc(z.full_history.per_year)}</td>`).join("")}</tr></tbody></table></div>
+      <p class="small muted">Replay of a $1,500 account taking the best-scoring A+ setups, ${esc(P.risk?.max_open_positions)} at a time. Crypto stops sit 20 to 40% away in a selloff, so sizing by risk keeps each position small: more risk per trade grows the account faster and deepens the drops. Change it under Funds, Desk settings.</p>` : ""}
+    ${ap.by_year && Object.keys(ap.by_year).length ? `<div class="tbl-wrap"><table><thead><tr><th>A+ setups by year</th>${Object.keys(ap.by_year).map((y) => `<th class="n">${esc(y)}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Win rate</td>${Object.values(ap.by_year).map((v) => `<td class="n">${pct(100 * v.win_rate, 0)}</td>`).join("")}</tr><tr><td>Trades</td>${Object.values(ap.by_year).map((v) => `<td class="n">${v.trades}</td>`).join("")}</tr>
+      <tr><td>Average trade</td>${Object.values(ap.by_year).map((v) => `<td class="n">${spct(100 * v.avg_ret)}</td>`).join("")}</tr></tbody></table></div><p class="small muted">Backtests flatter: results cluster in a few strong stretches, vary a lot by year, and real fills are never as clean. The account replay sizes like the live desk, but the past is not a promise.</p>` : ""}
+  </section>
+  <section class="section"><div class="section-head"><h2>Which strategy for which market</h2><span class="meta">Win odds after fees by market condition${cond ? ` · today's is outlined (${esc(COND[cond])})` : ""}</span></div>
+    <div class="tbl-wrap"><table class="heat"><thead><tr><th>Strategy</th>${COND_ORDER.map((c) => `<th class="${c === cond ? "today" : ""}" style="text-align:center">${COND[c]}</th>`).join("")}<th>Status</th></tr></thead><tbody>
+      ${ids.map((sid) => `<tr><td><b>${esc(strat[sid].label)}</b><div class="small muted">${esc(strat[sid].family || "")}</div></td>${COND_ORDER.map((c) => cell(sid, c)).join("")}
+        <td>${paused[sid] ? pill("warn", "Paused") : strat[sid].enabled ? pill("good", strat[sid].mode === "specialist" ? "Specialist" : "Active") : pill("neutral", "Off")}</td></tr>`).join("")}</tbody></table></div>
+    <p class="small muted">Gold = A+ (alerts are sent). Blue = grade A (watchlist only). Grey = the strategy does not trade in that condition. A strategy with gold in every column would be all-weather; the daily research looks for setups that fill the empty columns.</p></section>
+  <section class="section"><div class="section-head"><h2>Strategies</h2><span class="meta">${ids.filter((s) => strat[s].enabled).length} active of ${ids.length}</span></div><div class="grid g-2">${ids.map((sid) => stratCard(sid, strat[sid], paused[sid])).join("")}</div></section>`;
+  h += learningSection() + researchSection() + lessonsSection() + journalSection();
+  return h;
+}
+function stratCard(sid, s, pausedWhy) {
+  const st = (x) => x?.trades ? `${pct(100 * x.win_rate, 0)} of ${x.trades} · PF ${esc(x.profit_factor ?? "–")} · avg ${spct(100 * x.avg_ret, 2)}` : "no trades";
+  return `<div class="panel strat"><div class="row"><h3>${esc(s.label)}</h3>${pausedWhy ? pill("warn", "Paused") : s.enabled ? pill("good", s.mode === "specialist" ? "Specialist" : "Active") : pill("neutral", "Off")}<span class="tag">${esc(s.family || "")}</span></div>
+    <div class="small">${esc(s.about || "")}</div>
+    <div class="stats">${stat("Training", st(s.train))}${stat("Unseen data", st(s.oos))}${stat("Avg hold", s.train?.avg_hold ? s.train.avg_hold + " d" : "–")}${stat("Fill rate", s.train?.fill_rate != null ? pct(100 * s.train.fill_rate, 0) : "–")}</div>
+    <div class="why-box ${s.enabled && !pausedWhy ? "" : "off"}">${esc(pausedWhy ? "Paused by the daily review: " + pausedWhy : s.reason || "")}</div>
+    <details><summary>Rules and checks</summary><div class="idea" style="margin-top:6px"><div class="rules">${esc(s.rules || "")}</div>
+      <ul class="checks">${(s.checks || []).map((c) => `<li><span class="${c.ok ? "ok" : "no"}">${c.ok ? "✓" : "✗"}</span><span>${esc(c.label || CHECKS[c.key] || c.key)}: ${typeof c.value === "number" ? (/_n$/.test(c.key) ? c.value : /_pf$/.test(c.key) ? c.value.toFixed(2) : (100 * c.value).toFixed(1) + (c.key === "oos_decay" ? " pts" : "%")) : "–"}</span><span class="need">${esc(c.need)}</span></li>`).join("")}</ul></div></details></div>`;
+}
+function learningSection() {
+  const L = S.learning.stats; const ft = L?.featured || {};
+  const rows = (o) => Object.entries(o || {}).filter(([, v]) => v.n || v.open).map(([k, v]) => `<tr><td>${esc(S.backtest?.strategies?.[k]?.label || COND[k] || k)}</td><td class="n">${v.n}</td><td class="n">${v.n ? pct(100 * v.win_rate, 0) : "–"}</td><td class="n">${v.n ? spct(100 * v.avg_ret) : "–"}</td><td class="n">${v.fill_rate != null ? pct(100 * v.fill_rate, 0) : "–"}</td></tr>`).join("");
+  return `<section class="section"><div class="section-head"><h2>What the desk has learned from its own alerts</h2><span class="meta">${L ? "Updated " + dtPT(L.updated_at) : "Starts with the first daily review"}</span></div>
+    <div class="grid g-kpi">${kpi("A+ alerts graded", ft.n ? `${ft.wins}/${ft.n}` : "0", ft.n ? `${pct(100 * ft.win_rate, 0)} won · avg ${spct(100 * ft.avg_ret)} after fees` : "Every alert is graded on paper once it closes, whether or not you took it")}
+      ${kpi("Orders that filled", ft.fill_rate != null ? pct(100 * ft.fill_rate, 0) : "–", "Of alerts whose order window has ended")}
+      ${kpi("Your real trades", L?.live?.n ? `${L.live.wins}/${L.live.n}` : "0", L?.live?.n ? `${pct(100 * L.live.win_rate, 0)} won · ${smoney(L.live.pnl)}` : "")}
+      ${kpi("Paused strategies", String(Object.keys(S.learning.adjust?.paused || {}).length), "A strategy sits out when its last 12 graded alerts win under 45%")}</div>
+    ${L && (rows(L.by_strategy) || rows(L.by_condition)) ? `<div class="tbl-wrap"><table><thead><tr><th>By strategy / market condition</th><th class="n">Graded</th><th class="n">Won</th><th class="n">Avg</th><th class="n">Filled</th></tr></thead><tbody>${rows(L.by_strategy)}${rows(L.by_condition)}</tbody></table></div>` : ""}
+    <p class="small muted">Each graded alert counts double a backtest trade when the win odds are re-estimated, so the grading follows what is working now.</p></section>`;
+}
+function researchSection() {
+  const R = [...S.research].sort((a, b) => String(b.tested_at).localeCompare(String(a.tested_at)));
+  const tone = { candidate: "good", watch: "info", redundant: "neutral", rejected: "neutral" };
+  return `<section class="section"><div class="section-head"><h2>Research log</h2><span class="meta">${R.length} idea${R.length === 1 ? "" : "s"} tested · new ones every day, including the desk's own designs</span></div>
+    ${R.length ? `<div class="grid g-research">${R.map((r) => `<div class="panel idea"><div class="row"><h3>${esc(r.label || r.id)}</h3>${pill(tone[r.verdict] || "neutral", r.verdict)}${r.own_design ? `<span class="tag">Own design</span>` : ""}${S.params?.custom?.[r.id] ? `<span class="tag">Live</span>` : ""}</div>
+      <div class="small">${esc(r.spec?.about || "")}</div><div class="small muted">${esc(r.summary || "")}</div><div class="small muted">${esc(r.family || "")} · tested ${dPT(r.tested_at)}</div></div>`).join("")}</div>`
+      : `<div class="empty">The daily learning run tests its first ideas after the next daily close: a backlog of ten is queued, and at least one new own design is added every day.</div>`}</section>`;
+}
+function lessonsSection() {
+  const items = [...(S.learning.lessons?.items || [])].reverse();
+  return `<section class="section"><div class="section-head"><h2>Lessons kept for good</h2><span class="meta">${items.length} so far · every research session starts by reading them</span></div>
+    ${items.length ? `<div class="panel">${items.map((i) => `<div class="lesson"><span class="tag">${esc(i.topic)}</span> <b>${esc(i.lesson)}</b><div class="small muted">${esc(i.evidence || "")} · ${dPT(i.date)}</div></div>`).join("")}</div>` : `<div class="empty">Lessons are added as the desk measures them.</div>`}</section>`;
+}
+function journalSection() {
+  return `<section class="section"><div class="section-head"><h2>Daily journal</h2><span class="meta">What worked, what didn't, what changed</span></div>
+    ${S.journal.length ? S.journal.slice(0, 30).map((j, i) => `<details class="panel" ${i === 0 ? "open" : ""}><summary>${dPT(j.date)} · ${esc(j.market_label || "")}${j.changes?.length ? " · " + j.changes.length + " change" + (j.changes.length === 1 ? "" : "s") : ""}</summary>
+      <div class="idea" style="margin-top:8px">${j.notes ? `<div>${esc(j.notes)}</div>` : ""}
+      ${(j.insights || []).length ? `<ul class="steps">${j.insights.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+      ${(j.changes || []).length ? `<div><b>Changes:</b> ${j.changes.map(esc).join(" ")}</div>` : ""}
+      ${(j.research || []).length ? `<div><b>Research:</b><ul class="steps">${j.research.map((x) => `<li>${esc(typeof x === "string" ? x : `${x.label || x.id}: ${x.verdict}. ${x.summary || ""}`)}</li>`).join("")}</ul></div>` : ""}
+      ${j.promotion ? `<div><b>Promotion check:</b> ${esc(j.promotion)}</div>` : ""}
+      ${(j.lessons || []).length ? `<div><b>New lessons:</b><ul class="steps">${j.lessons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+      ${(j.issues || []).length ? `<div class="banner crit">${j.issues.map(esc).join(" ")}</div>` : ""}</div></details>`).join("") : `<div class="empty">The first journal entry is written by the first daily learning review.</div>`}</section>`;
+}
+
+// ---------------------------------------------------------------- modals + writes
+function modal(title, body, submitLabel, onSubmit) {
+  const root = $("#modalRoot");
+  root.innerHTML = `<div class="modal-back" role="dialog" aria-modal="true" aria-label="${esc(title)}"><form class="modal" id="modalForm" novalidate><h3>${esc(title)}</h3>${body}<div class="banner crit" id="modalErr" hidden></div><div class="foot"><button class="btn" type="button" id="modalCancel">Cancel</button><button class="btn primary" type="submit">${esc(submitLabel)}</button></div></form></div>`;
+  const close = () => { root.innerHTML = ""; };
+  $("#modalCancel").onclick = close;
+  $(".modal-back").addEventListener("pointerdown", (e) => { if (e.target.classList.contains("modal-back")) close(); });
+  $("#modalForm").onsubmit = async (e) => { e.preventDefault(); const btn = e.target.querySelector("button[type=submit]"); btn.disabled = true;
+    try { await onSubmit(); close(); } catch (err) { console.error(err); const el = $("#modalErr"); if (el) { el.hidden = false; el.textContent = err?.message || writeErr(err); } btn.disabled = false; } };
+  setTimeout(() => root.querySelector("input,select")?.focus(), 30);
+}
+function writeErr(e) { const c = e?.code; return c === "permission_denied" ? "You can view this dashboard but not change it." : c === "unavailable" ? "The database isn't reachable right now. Try again in a moment." : "Couldn't save (" + (c || e?.message || "error") + ")."; }
+function need(v, label) { const n = Number(v); if (!Number.isFinite(n) || n <= 0) throw { message: `${label} must be a number above zero.` }; return n; }
+async function setDoc(path, data) { if (!S.db) throw { code: "unavailable" }; await S.db.doc(path).set(data); }
+async function updDoc(path, data) { if (!S.db) throw { code: "unavailable" }; await S.db.doc(path).update(data); }
+const localNow = () => { const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60000); return d.toISOString().slice(0, 16); };
+function fillModal(a) {
+  const st = settings(), market = a.entry_kind === "open_next", feePct = market ? st.taker_fee_pct : st.maker_fee_pct;
+  modal(`${a.ticker}: record your fill`, `<div class="small muted">Enter what your exchange actually filled. The desk then watches the position: stop ${fp(a.stop)}, target ${fp(a.target)}, up to ${esc(a.hold_max_days)} days.</div>
+    <div class="form"><div class="row"><label class="f" for="mPx">Fill price ($)<input id="mPx" type="number" step="any" min="0" value="${esc(a.entry)}"></label>
+      <label class="f" for="mQty">Quantity (${esc(a.ticker)})<input id="mQty" type="number" step="any" min="0" value="${esc(a.qty)}"></label></div>
+      <div class="row"><label class="f" for="mFee">Fee paid ($)<input id="mFee" type="number" step="any" min="0" value="${(num(a.entry) * num(a.qty) * feePct / 100).toFixed(2)}"></label>
+      <label class="f" for="mAt">Filled at (your local time)<input id="mAt" type="datetime-local" value="${localNow()}" max="${localNow()}"></label></div></div>`, "Save position", async () => {
+    const price = need($("#mPx").value, "Fill price"), q = need($("#mQty").value, "Quantity"), fee = Math.max(0, Number($("#mFee").value) || 0);
+    const at = new Date($("#mAt").value || Date.now()); if (isNaN(at)) throw { message: "Pick the time it filled." };
+    const id = uid("t");
+    await setDoc("trades/" + id, { id, ticker: a.ticker, product: a.product, strategy: a.strategy, strategy_label: a.strategy_label, grade: a.grade, condition: a.condition, status: "open",
+      entry_price: price, qty: q, fee_in: fee, entry_at: at.toISOString(), stop: num(a.stop), target: num(a.target), planned_entry: num(a.entry), hold_max_days: num(a.hold_max_days) || 7,
+      dyn_exit: a.dyn_exit || "none", exit_signal: a.exit_signal || "", atr: num(a.atr), win_pct: num(a.win_pct), score: num(a.score), alert_id: a.id, created_at: nowIso() });
+    await updDoc("alerts/" + a.id, { status: "filled", trade_id: id, filled_at: at.toISOString(), actual_price: price, actual_qty: q });
+    toast(`${a.ticker} position saved. Now place the stop at ${fp(a.stop)} and the limit sell at ${fp(a.target)} on your exchange.`, 8000); S.tab = "alerts";
+  });
+}
+function closeModal(t, pre = {}) {
+  const st = settings(), m = latestMarks()[t.id] || {}, guess = pre.code === "TARGET_HIT" ? t.target : pre.code === "STOP_HIT" ? t.stop : m.last ?? "";
+  const why = { TARGET_HIT: "Target filled", STOP_HIT: "Stop filled", EXIT_RULE: "Exit signal", TIME_STOP: "Time stop" }[pre.code] || "Manual";
+  modal(`${t.ticker}: record the sale`, `<div class="small muted">Entry ${fp(t.entry_price)} × ${qty(t.qty)}. Enter what your exchange filled. Sell part of it by lowering the quantity.</div>
+    <div class="form"><div class="row"><label class="f" for="cPx">Sell price ($)<input id="cPx" type="number" step="any" min="0" value="${esc(guess)}"></label>
+      <label class="f" for="cQty">Quantity sold<input id="cQty" type="number" step="any" min="0" value="${esc(t.qty)}"></label></div>
+      <div class="row"><label class="f" for="cFee">Fee paid ($)<input id="cFee" type="number" step="any" min="0" placeholder="auto"></label>
+      <label class="f" for="cWhy">Reason<select id="cWhy">${SELL_REASONS.map((r) => `<option ${r === why ? "selected" : ""}>${r}</option>`).join("")}</select></label>
+      <label class="f" for="cAt">Sold at (your local time)<input id="cAt" type="datetime-local" value="${localNow()}" max="${localNow()}"></label></div>
+      <div class="pc-quick"><span class="small muted">Quick fill:</span><button type="button" class="chip" data-fillpx="${esc(t.target)}">Target ${fp(t.target)}</button><button type="button" class="chip" data-fillpx="${esc(t.stop)}">Stop ${fp(t.stop)}</button>${m.last ? `<button type="button" class="chip" data-fillpx="${esc(m.last)}">Last ${fp(m.last)}</button>` : ""}</div></div>`, "Record sale", async () => {
+    const ex = need($("#cPx").value, "Sell price"), q = need($("#cQty").value, "Quantity"), tq = num(t.qty);
+    if (q > tq * 1.0000001) throw { message: `You hold ${qty(tq)} ${t.ticker}; the quantity sold can't be more.` };
+    const reason = $("#cWhy").value, at = new Date($("#cAt").value || Date.now()); if (isNaN(at)) throw { message: "Pick the time it sold." };
+    const feeRate = (reason === "Target filled" ? st.maker_fee_pct : st.taker_fee_pct) / 100;
+    const feeOut = $("#cFee").value === "" ? ex * q * feeRate : Math.max(0, Number($("#cFee").value) || 0);
+    const share = Math.min(1, q / tq), feeIn = (num(t.fee_in) || 0) * share, cost = num(t.entry_price) * q + feeIn;
+    const pnl = +(ex * q - feeOut - cost).toFixed(2), pnlPct = +((100 * pnl) / cost).toFixed(2);
+    const days = Math.max(1, Math.ceil((at - new Date(t.entry_at)) / 86400000)), whole = share > 0.999999;
+    const closed = { status: "closed", exit_price: ex, exit_at: at.toISOString(), exit_reason: reason, fee_out: +feeOut.toFixed(2), pnl, pnl_pct: pnlPct, days_held: days,
+      r_mult: num(t.stop) && num(t.entry_price) > num(t.stop) ? +((ex - num(t.entry_price)) / (num(t.entry_price) - num(t.stop))).toFixed(2) : null };
+    if (whole) await updDoc("trades/" + t.id, closed);
+    else { const cid = uid("t"); await setDoc("trades/" + cid, { ...t, id: cid, parent_id: t.id, qty: q, fee_in: +feeIn.toFixed(2), ...closed, created_at: nowIso() });
+      await updDoc("trades/" + t.id, { qty: +(tq - q).toPrecision(10), fee_in: +((num(t.fee_in) || 0) - feeIn).toFixed(2) }); }
+    const lid = uid("pnl"); await setDoc("ledger/" + lid, { id: lid, type: "pnl", amount: pnl, at: at.toISOString(), date: at.toISOString().slice(0, 10), ticker: t.ticker, trade_id: t.id, note: `${t.ticker} ${reason.toLowerCase()}${whole ? "" : " (part)"}` });
+    if (pre.alertId) { try { await updDoc("alerts/" + pre.alertId, { status: "done", done_at: nowIso() }); } catch {} }
+    if (whole) for (const x of S.alerts.filter((x) => x.type === "exit" && x.trade_id === t.id && x.status === "new" && x.id !== pre.alertId)) { try { await updDoc("alerts/" + x.id, { status: "done", done_at: nowIso() }); } catch {} }
+    toast(`${t.ticker} sale recorded: ${smoney(pnl)} (${spct(pnlPct)}) after fees.${whole ? " Cancel any stop or target order still resting on your exchange." : ""}`, 8000);
+  });
+  document.querySelectorAll("[data-fillpx]").forEach((b) => (b.onclick = () => { $("#cPx").value = b.dataset.fillpx; }));
+}
+function editModal(t) {
+  modal(`${t.ticker}: edit position`, `<div class="form"><div class="row"><label class="f" for="ePx">Entry price ($)<input id="ePx" type="number" step="any" value="${esc(t.entry_price)}"></label><label class="f" for="eQty">Quantity<input id="eQty" type="number" step="any" value="${esc(t.qty)}"></label><label class="f" for="eFee">Entry fee ($)<input id="eFee" type="number" step="any" value="${esc(t.fee_in ?? 0)}"></label></div>
+    <div class="row"><label class="f" for="eStop">Stop ($)<input id="eStop" type="number" step="any" value="${esc(t.stop)}"></label><label class="f" for="eTgt">Target ($)<input id="eTgt" type="number" step="any" value="${esc(t.target)}"></label><label class="f" for="eHold">Hold limit (days)<input id="eHold" type="number" step="1" min="1" value="${esc(t.hold_max_days || 7)}"></label></div></div>`, "Save", async () => {
+    await updDoc("trades/" + t.id, { entry_price: need($("#ePx").value, "Entry price"), qty: need($("#eQty").value, "Quantity"), fee_in: Math.max(0, Number($("#eFee").value) || 0), stop: need($("#eStop").value, "Stop"), target: need($("#eTgt").value, "Target"), hold_max_days: Math.round(need($("#eHold").value, "Hold limit")) });
+    toast(`${t.ticker} updated.`); });
+}
+async function copyOrder(a) {
+  const txt = `${a.ticker}-USD ${a.order}\nAfter the fill: STOP ${fp(a.stop)} · TARGET (limit sell) ${fp(a.target)} · hold up to ${a.hold_max_days} days. ${a.exit_signal || ""}`;
+  try { await navigator.clipboard.writeText(txt); toast("Order copied."); } catch { modal(`Order for ${a.ticker}`, `<textarea id="cpy" rows="6" readonly>${esc(txt)}</textarea>`, "Done", async () => {}); }
+}
+async function scanNow() {
+  const st = settings(); if (!S.mcp || !st.manual_trigger_id || S.starting) return;
+  S.starting = true; renderChips();
+  try { await S.mcp.callTool("Claude Code Remote", "fire_trigger", { trigger_id: st.manual_trigger_id });
+    toast("Scan started. Results arrive here in about five minutes, and on your phone.", 7000); }
+  catch (e) { toast({ needs_reauth: "Reconnect Claude Code Remote in claude.ai Settings, then try again.", server_not_connected: "Open the dashboard in claude.ai to start a scan.", approval_required: "Starting a scan needs your approval. Press the button again and allow it." }[e?.code] || "Couldn't start the scan (" + (e?.code || "error") + ").", 8000); }
+  finally { setTimeout(() => { S.starting = false; renderChips(); }, 20000); }
+}
+
+// ---------------------------------------------------------------- events
+document.addEventListener("click", async (e) => {
+  const tab = e.target.closest("[data-tab]"); if (tab) { S.tab = tab.dataset.tab; try { localStorage.setItem("csd_tab", S.tab); } catch {} render(); window.scrollTo(0, 0); return; }
+  const btn = e.target.closest("[data-act]"); if (!btn) return;
+  const act = btn.dataset.act, a = btn.dataset.id ? S.alerts.find((x) => x.id === btn.dataset.id) : null, t = btn.dataset.tid ? S.trades.find((x) => x.id === btn.dataset.tid) : null;
+  try {
+    if (act === "fill" && a) fillModal(a);
+    else if (act === "placed" && a) { await updDoc("alerts/" + a.id, { status: "placed", placed_at: nowIso() }); toast(`${a.ticker} marked as placed. Press Filled when it fills.`); }
+    else if (act === "skip" && a) { await updDoc("alerts/" + a.id, { status: "skipped", skipped_at: nowIso() }); toast(`${a.ticker} skipped. The learning review still grades it on paper.`); }
+    else if (act === "nofill" && a) { await updDoc("alerts/" + a.id, { status: "unfilled", unfilled_at: nowIso() }); toast(`${a.ticker}: recorded as not filled.`); }
+    else if (act === "cancelled" && a) { await updDoc("alerts/" + a.id, { status: "cancelled", cancelled_at: nowIso() }); toast(`${a.ticker}: order recorded as cancelled.`); }
+    else if (act === "copy" && a) copyOrder(a);
+    else if (act === "dismiss" && a) await updDoc("alerts/" + a.id, { status: "dismissed", done_at: nowIso() });
+    else if (act === "applystop" && a) { if (a.trade_id && a.new_stop) await updDoc("trades/" + a.trade_id, { stop: num(a.new_stop) }); await updDoc("alerts/" + a.id, { status: "done", done_at: nowIso() }); toast(`${a.ticker} stop updated to ${fp(a.new_stop)}.`); }
+    else if (act === "cardstop" && t) { await updDoc("trades/" + t.id, { stop: num(btn.dataset.px) }); toast(`${t.ticker} stop updated to ${fp(btn.dataset.px)}.`); }
+    else if (act === "close" && t) closeModal(t, { code: btn.dataset.code, alertId: btn.dataset.aid });
+    else if (act === "edit" && t) editModal(t);
+  } catch (err) { console.error(err); toast(writeErr(err)); }
+});
+document.addEventListener("submit", async (e) => {
+  if (e.target.id === "fundsForm") { e.preventDefault();
+    try { const amt = need($("#fAmt").value, "Amount"), typ = $("#fType").value, id = uid(typ === "deposit" ? "dep" : "wd");
+      await setDoc("ledger/" + id, { id, type: typ, amount: typ === "deposit" ? amt : -amt, at: nowIso(), date: todayPT(), note: $("#fNote").value.slice(0, 120) });
+      toast(`${typ === "deposit" ? "Added" : "Removed"} ${money(amt)}.`); } catch (err) { toast(err?.message || writeErr(err)); } }
+  if (e.target.id === "setForm") { e.preventDefault();
+    try { const s = { ...settings(), initial_balance: need($("#sInit").value, "Starting balance"), max_open_positions: Math.max(1, Math.round(Number($("#sMax").value) || 4)), risk_pct: need($("#sRisk").value, "Risk per trade"),
+        max_position_pct: need($("#sPos").value, "Max position"), maker_fee_pct: Math.max(0, Number($("#sMk").value) || 0), taker_fee_pct: Math.max(0, Number($("#sTk").value) || 0), exchange: $("#sEx").value.slice(0, 40) || "Exchange", updated_at: nowIso() };
+      await setDoc("config/settings", s); const init = S.ledger.find((l) => l.type === "initial");
+      if (init && num(init.amount) !== s.initial_balance) await updDoc("ledger/" + init.id, { amount: s.initial_balance });
+      toast("Settings saved. The next scan uses them."); } catch (err) { toast(err?.message || writeErr(err)); } }
+});
+$("#scanBtn").addEventListener("click", scanNow);
+
+// ---------------------------------------------------------------- boot
+try { const t = localStorage.getItem("csd_tab"); if (t && TABS.some(([k]) => k === t)) S.tab = t; } catch {}
+render();
+const loadTimer = setTimeout(() => { if (!S.loaded.alerts) { S.dbError = "The dashboard database hasn't answered yet. It refreshes by itself once it does."; render(); } }, 10000);
+let rq = 0, pending = false;
+const busy = () => !!$("#modalRoot").firstChild || (document.activeElement && $("#main").contains(document.activeElement) && /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName));
+const rerender = () => { if (busy()) { pending = true; return; } cancelAnimationFrame(rq); rq = requestAnimationFrame(render); };
+setInterval(() => { if (pending && !busy()) { pending = false; render(); } }, 1500);
+(async () => {
+  const [db, mcp] = await Promise.all([claude.use("db"), claude.use("mcp")]);
+  S.db = db; S.mcp = mcp;
+  if (!db) { clearTimeout(loadTimer); S.dbError = "This view can't reach the dashboard database. Open the dashboard in claude.ai while signed in."; render(); return; }
+  const onErr = (name) => (err) => { console.error(name, err); if (err?.code !== "unavailable") { S.dbError = `Couldn't load ${name} (${err?.code}).`; rerender(); } };
+  const list = (snap) => snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  db.doc("config/settings").onSnapshot((d) => { S.settings = d.exists ? d.data() : null; rerender(); }, onErr("settings"));
+  db.collection("alerts").orderBy("created_at", "desc").limit(300).onSnapshot((s) => { S.alertsRaw = list(s); mergeAlerts(); S.loaded.alerts = true; clearTimeout(loadTimer); S.dbError = null; rerender(); }, onErr("alerts"));
+  db.collection("trades").onSnapshot((s) => { S.trades = list(s); rerender(); }, onErr("trades"));
+  db.collection("ledger").onSnapshot((s) => { S.ledger = list(s); rerender(); }, onErr("funds"));
+  db.collection("scans").orderBy("started_at", "desc").limit(40).onSnapshot((s) => { S.scans = list(s); mergeAlerts(); rerender(); }, onErr("scans"));
+  db.collection("journal").orderBy("date", "desc").limit(40).onSnapshot((s) => { S.journal = list(s); rerender(); }, onErr("journal"));
+  db.collection("research").limit(300).onSnapshot((s) => { S.research = list(s); rerender(); }, onErr("research"));
+  db.collection("learning").limit(20).onSnapshot((s) => { S.learning = Object.fromEntries(list(s).map((d) => [d.id, d])); rerender(); }, onErr("learning record"));
+  db.doc("strategy/params").onSnapshot((d) => { S.params = d.exists ? d.data() : null; rerender(); }, onErr("strategy settings"));
+  db.doc("strategy/backtest").onSnapshot((d) => { S.backtest = d.exists ? d.data() : null; rerender(); }, onErr("backtest"));
+})();
+})();
