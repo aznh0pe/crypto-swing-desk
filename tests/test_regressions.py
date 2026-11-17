@@ -163,6 +163,20 @@ def main():
     ex_found, _ = SC.find_entries(indz, Pz, {}, I.condition_series(indz["market"]).iloc[-1] if hasattr(I, "condition_series") else "bull_calm", {})
     assert len([e for e in ex_found if e["grade"] == "A+"]) == len([e for e in open_found if e["grade"] == "A+"])
     assert all(e["win_pct"] == 67.0 and e["zone_cell"] for e in ex_found if e["grade"] == "A+")
+    # 13. an open position whose strategy has no record of its own in a blocked zone gets a sell call; an exempt one holds
+    wd0, part0, _ = D.load_daily(w / "data")
+    tk0 = [c for c in indz["close"].columns if c.startswith("C")][0]
+    px0 = {tk0: float(indz["close"][tk0].iloc[-1])}
+    trade = {"id": "t1", "ticker": tk0, "entry_price": px0[tk0] * 0.98, "qty": 10, "stop": px0[tk0] * 0.5, "target": px0[tk0] * 3, "hold_max_days": 6, "dyn_exit": "none",
+             "entry_at": (now - pd.Timedelta(hours=3)).isoformat(), "strategy": sid}
+    Pz["zones"]["exempt"] = {}
+    st1 = SC.check_position(trade, indz, wd0, part0, None, px0, Pz, "check", now)
+    assert st1["code"] == "ZONE_EXIT" and st1["tone"] == "sell", st1["code"]
+    tier0 = "core" if bool(indz["is_core"][tk0].iloc[-1]) else "wide"
+    Pz["zones"]["exempt"] = {zone: {f"{sid}|{tier0}": {"p": 0.67, "n": 49, "days": 17}}}
+    assert SC.check_position(trade, indz, wd0, part0, None, px0, Pz, "check", now)["code"] == "HOLD"
+    # 14. the book stamp changes when a zone opens or closes, so the next scan re-grades live tickets
+    assert SC.book_id({**P0, "zones": {"blocked": ["slide"], "exempt": {}}}) != b0
     print("regression tests passed")
 
 

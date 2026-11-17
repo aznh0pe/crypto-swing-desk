@@ -220,7 +220,8 @@ def book_id(P: dict) -> str:
     A code release that changes none of these must not trigger a second look for setups."""
     grades = lambda t: {s: {c: v.get("grade") for c, v in (cells or {}).items()} for s, cells in (t or {}).items()}
     body = {"strategies": P.get("strategies"), "core": grades(P.get("grade_table")), "wide": grades(P.get("grade_table_wide")),
-            "floor": (P.get("universe") or {}).get("min_dv"), "retired": sorted(P.get("retired") or {})}
+            "floor": (P.get("universe") or {}).get("min_dv"), "retired": sorted(P.get("retired") or {}),
+            "zones": [sorted((P.get("zones") or {}).get("blocked") or []), {z: sorted(v) for z, v in ((P.get("zones") or {}).get("exempt") or {}).items()}]}
     return hashlib.sha1(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
@@ -308,6 +309,21 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
     if sig:
         return {**out, "code": "EXIT_RULE", "label": "SELL NOW: exit signal", "tone": "sell",
                 "detail": f"The strategy's exit signal fired on the last daily close. {DYN_TEXT.get(dyn, '')} Sell at market and cancel the stop and target orders."}
+    zs = P.get("zones") or {}
+    zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
+    if zone in (zs.get("blocked") or []) and tr.get("strategy") and c is not None:
+        tier = "core" if bool(ind["is_core"][tk].iloc[-1]) else "wide"
+        if f"{tr['strategy']}|{tier}" not in ((zs.get("exempt") or {}).get(zone) or {}):
+            row = (zs.get("table") or {}).get(zone) or {}
+            fee = P["costs"]
+            even = entry * (1 + fee["maker_pct"] / 100) / (1 - fee["taker_pct"] / 100)
+            rec = (f"A+ setups in this zone won {100 * row['train']['win_rate']:.0f}% in the training years and {100 * row['unseen']['win_rate']:.0f}% on unseen data" if row.get("train") else "The A+ book loses in this zone")
+            up = last >= even
+            return {**out, "code": "ZONE_EXIT", "label": "SELL NOW: take the bounce" if up else "SELL: danger zone", "tone": "sell", "breakeven": round(even, 10),
+                    "detail": (f"Danger zone ({I.ZONE_LABEL[zone]}): {rec}, and this strategy on {'core' if tier == 'core' else 'wider-list'} coins has no A+ record of its own here. "
+                               "Tested on past trades like it, every way of holding lost on average and selling the first bounce did best. "
+                               + (f"Price {last:.6g} is above your break-even after fees ({even:.6g}): sell now and cancel the stop and target orders." if up else
+                                  f"Price {last:.6g} is under your break-even after fees ({even:.6g}): sell at market, or rest a sell limit at {even:.6g} for today and sell at market at the daily close if it has not filled. Keep the stop at {stop:.6g} until then."))}
     if hours_left <= 0:
         return {**out, "code": "TIME_STOP", "label": "SELL NOW: time is up", "tone": "sell",
                 "detail": f"Held {days_held} days, the limit for this setup is {hold}. Sell at market and cancel the stop and target orders."}
@@ -441,6 +457,25 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
         else:
             found, n2 = find_entries(ind, P, uni, mkt["condition"], paused)
             notes += n2
+            for e in found:                                    # re-grade tickets that are still live under the book in force now
+                aid0 = f"{(day_bar + pd.Timedelta(days=1)).strftime('%Y%m%d')}-{e['ticker']}-{e['strategy']}"
+                old = state["alerts"].get(aid0)
+                if not old or old.get("status") not in ("new", "placed") or old.get("withdrawn"):
+                    continue
+                was = float(old.get("win_pct") or 0)
+                if e["grade"] != "A+":
+                    why = ("Danger zone: this strategy has no A+ record of its own in the current zone." if e.get("zone_blocked") else "It no longer grades A+ under the current strategy book.")
+                    upd = {"withdrawn": True, "withdrawn_reason": f"Downgraded from A+ on {iso(now)[:10]}: {why} Cancel the order if it has not filled.",
+                           "win_pct": e["win_pct"], "regraded_at": iso(now)}
+                elif abs(e["win_pct"] - was) >= 1:
+                    upd = {"win_pct": e["win_pct"], "score": e["score"], "cell_n": e.get("cell_n"), "zone_cell": bool(e.get("zone_cell")), "regraded_at": iso(now),
+                           "note": (f"Re-graded on {iso(now)[:10]}: win estimate {e['win_pct']:.0f}% (was {was:.0f}%)"
+                                    + (f", from this strategy's own record in the danger zone ({e['cell_n']} trades on {e.get('cell_days')} days)." if e.get("zone_cell") else " under the current strategy book."))}
+                else:
+                    continue
+                alert_updates.setdefault(aid0, {}).update(upd)
+                _write(out, writes, "update", "alerts", aid0, upd)          # stored on the ticket itself, so later scans cannot bring the old odds back
+                notes.append(f"{e['ticker']}: " + (upd.get("withdrawn_reason") or upd["note"]))
             if catch_up or now >= day_bar + pd.Timedelta(days=1, hours=2):       # late: drop what the market already took
                 late = []
                 for e in found:

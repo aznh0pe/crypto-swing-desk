@@ -531,6 +531,8 @@ function attention() {
   const last = S.scans[0];
   const miss = deskHealth().filter((r) => !r.scan);
   if (miss.length && !(last && Date.now() - Date.parse(last.started_at) > 26 * 3600000)) out += `<div class="banner warn" style="margin-bottom:12px"><b>${miss.length} scheduled scan${miss.length === 1 ? "" : "s"} did not run</b> (${miss.map((r) => dtPT(r.at)).join(", ")}). ${last ? `The last scan was ${dtPT(last.started_at)}.` : ""} The next run catches up; press Scan now to do it right away. <button class="btn small" type="button" data-tab="scans">Desk health</button></div>`;
+  const cal = S.params?.calibrated_at, lastSetups = S.scans.find((x) => x.mode === "close");
+  if (cal && lastSetups && Date.parse(cal) > Date.parse(lastSetups.started_at) + 60000) out += `<div class="banner warn" style="margin-bottom:12px"><b>The strategy book was updated ${dtPT(cal)}, after the last scan that looked for setups (${dtPT(lastSetups.started_at)}).</b> Tickets, positions and the market panel below are from before the update. The next scan applies it; press Scan now to do it right away.</div>`;
   if (last && Date.now() - Date.parse(last.started_at) > 26 * 3600000) out += `<div class="banner warn" style="margin-bottom:12px"><b>No scan in over a day</b> (last: ${dtPT(last.started_at)}). Open positions are not being checked. Press Scan now, or open the Crypto Swing Desk chat.</div>`;
   if (last?.data?.status && last.data.status !== "ok") out += `<div class="banner warn" style="margin-bottom:12px"><b>Prices were behind at the last scan.</b> ${esc((last.data.notes || []).join(" "))}</div>`;
   if (last?.run_issues?.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Problem in the last scan:</b> ${last.run_issues.map(esc).join(" ")}</div>`;
