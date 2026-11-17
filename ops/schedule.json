@@ -3,7 +3,7 @@
  "dashboard": "https://claude.ai/artifact/WegWWtq9MtYa7uVz3FLiH3",
  "tasks": {
   "scan": {
-   "id": "trig_01Ep68rdKc8UqGnPGLMPKNzU",
+   "id": "trig_01XmDAuDmq7onNrgMfTCVdd3",
    "cron_utc": "20 0,13,19 * * *",
    "pacific_winter": "4:20 PM (daily close), 5:20 AM, 11:20 AM",
    "prompt": "ops/generated/scan.md",
@@ -29,5 +29,6 @@
  "feed": {
   "workflow": "crypto-data (self-renewing 10-minute loop)",
   "watchdog": "crypto-watchdog (every 15 minutes: restarts the loop if the data branch is over 90 minutes old or no run is alive)"
- }
+ },
+ "scan_task_note": "2026-11-17: scan task recreated with email notifications on (push + email); the old task trig_01Ep68rdKc8UqGnPGLMPKNzU is disabled, kept for its run history."
 }
