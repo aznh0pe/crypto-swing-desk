@@ -527,7 +527,11 @@ function attention() {
   let out = "";
   const ex = exitAlerts(), res = toResolve();
   if (ex.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Action needed: ${ex.map((a) => `${esc(a.ticker)} ${esc(String(a.label || "").split(":")[0].toLowerCase())}`).join(", ")}.</b> <button class="btn small" type="button" data-tab="alerts">Open alerts</button></div>`;
-  if (res.length) out += `<div class="banner info" style="margin-bottom:12px"><b>${res.map((a) => esc(a.ticker)).join(", ")}: did ${res.length === 1 ? "this order" : "these orders"} fill?</b> The order window is over. Record the result so the desk watches the position. <button class="btn small" type="button" data-tab="alerts">Answer</button></div>`;
+  const rc = res.filter((a) => expiryOf(a)?.action === "cancel"), rf = res.filter((a) => expiryOf(a)?.action === "record_fill"), rq = res.filter((a) => !rc.includes(a) && !rf.includes(a));
+  const tl = (l) => l.map((a) => esc(a.ticker)).join(", ");
+  if (rc.length) out += `<div class="banner crit" style="margin-bottom:12px"><b>Cancel the ${tl(rc)} buy order${rc.length === 1 ? "" : "s"} on Coinbase.</b> Confirmed: price never reached ${rc.length === 1 ? "the limit" : "their limits"} inside the order window, so ${rc.length === 1 ? "it" : "they"} did not fill. Cancel so ${rc.length === 1 ? "it" : "they"} cannot fill late. <button class="btn small" type="button" data-tab="alerts">Open</button></div>`;
+  if (rf.length) out += `<div class="banner info" style="margin-bottom:12px"><b>${tl(rf)}: your buy order${rf.length === 1 ? "" : "s"} should have filled.</b> Price traded below the limit inside the order window. Record the fill so the desk watches the position. <button class="btn small" type="button" data-tab="alerts">Record</button></div>`;
+  if (rq.length) out += `<div class="banner warn" style="margin-bottom:12px"><b>${tl(rq)}: check ${rq.length === 1 ? "this order" : "these orders"} on Coinbase.</b> The order window is over. If still open, cancel; if filled, record it. <button class="btn small" type="button" data-tab="alerts">Open</button></div>`;
   const last = S.scans[0];
   const miss = deskHealth().filter((r) => !r.scan);
   if (miss.length && !(last && Date.now() - Date.parse(last.started_at) > 26 * 3600000)) out += `<div class="banner warn" style="margin-bottom:12px"><b>${miss.length} scheduled scan${miss.length === 1 ? "" : "s"} did not run</b> (${miss.map((r) => dtPT(r.at)).join(", ")}). ${last ? `The last scan was ${dtPT(last.started_at)}.` : ""} The next run catches up; press Scan now to do it right away. <button class="btn small" type="button" data-tab="scans">Desk health</button></div>`;
@@ -659,11 +663,19 @@ function ticket(a) {
       ${a.status !== "placed" ? `<button class="btn ghost small" type="button" data-act="skip" data-id="${esc(a.id)}">Skip</button>` : `<button class="btn ghost small" type="button" data-act="cancelled" data-id="${esc(a.id)}">Cancelled</button>`}
     </div></article>`;
 }
+function expiryOf(a) { if (a.expiry && a.expiry.text) return a.expiry; const fc = fillCheckMap()[a.id]; return fc && fc.window_over ? fc : null; }
 function resolveCard(a) {
-  const fc = fillCheckMap()[a.id];
-  return `<div class="act info"><div class="tk">${esc(a.ticker)}</div><div><div class="what">Did your buy limit at ${fp(a.entry)} fill?</div>
-    <div class="why">${fc ? esc(fc.text) : "The order window ended " + dtPT(a.valid_until) + ". The next scan checks the low against your limit."}</div></div>
-    <div class="btns"><button class="btn primary small" type="button" data-act="fill" data-id="${esc(a.id)}">Yes, filled</button><button class="btn small" type="button" data-act="nofill" data-id="${esc(a.id)}">No</button></div></div>`;
+  const x = expiryOf(a), act = x?.action;
+  const what = act === "cancel" ? `Cancel your buy limit at ${fp(a.entry)} on Coinbase: it did not fill`
+    : act === "record_fill" ? `Your buy limit at ${fp(a.entry)} should have filled: record it`
+    : act === "check" ? `Check your buy limit at ${fp(a.entry)} on Coinbase` : `Did your buy limit at ${fp(a.entry)} fill?`;
+  const nums = x && num(x.low) !== null ? `<div class="small muted">Lowest trade in the order window ${fp(x.low)} · your limit ${fp(a.entry)} · window ended ${dtPT(a.valid_until)}${x.checked_at ? ` · checked ${dtPT(x.checked_at)}` : ""}</div>` : "";
+  const btns = act === "cancel"
+    ? `<button class="btn primary small" type="button" data-act="cancelled" data-id="${esc(a.id)}">I cancelled it</button><button class="btn ghost small" type="button" data-act="fill" data-id="${esc(a.id)}">It filled</button>`
+    : `<button class="btn primary small" type="button" data-act="fill" data-id="${esc(a.id)}">${act === "record_fill" ? "Record the fill" : "It filled"}</button><button class="btn small" type="button" data-act="cancelled" data-id="${esc(a.id)}">Not filled, I cancelled it</button>`;
+  return `<div class="act ${act === "cancel" || act === "check" ? "alert" : act === "record_fill" ? "good" : "info"}"><div class="tk">${esc(a.ticker)}</div><div><div class="what">${what}</div>
+    <div class="why">${x ? esc(x.text) : "The order window ended " + dtPT(a.valid_until) + ". The next scan confirms whether price ever reached your limit; until then, check the order on Coinbase."}</div>${nums}</div>
+    <div class="btns">${btns}</div></div>`;
 }
 function exitCard(a) {
   const t = S.trades.find((x) => x.id === a.trade_id); const tone = a.code === "TARGET_HIT" ? "good" : a.code === "RAISE_STOP" ? "info" : "alert";
@@ -701,7 +713,7 @@ function viewAlerts() {
   const live = S.alerts.filter(entryLive).sort((a, b) => (num(a.rank) ?? 99) - (num(b.rank) ?? 99));
   const feat = live, held = live.filter((a) => a.also_qualified).length;
   const sc = S.scans.find((x) => x.mode === "close");
-  let h = res.length ? `<section class="section"><div class="section-head"><h2>Did these orders fill?</h2><span class="meta">Their order windows are over</span></div><div class="grid">${res.map(resolveCard).join("")}</div></section>` : "";
+  let h = res.length ? `<section class="section"><div class="section-head"><h2>Orders past their window</h2><span class="meta">Cancel what did not fill, record what did</span></div><div class="grid">${res.map(resolveCard).join("")}</div></section>` : "";
   h += `<section class="section"><div class="section-head"><h2>Action needed on open positions</h2><span class="meta">Sell, confirm a fill or raise a stop</span></div>
     ${ex.length ? `<div class="grid">${ex.map(exitCard).join("")}</div>` : `<div class="empty">No open position needs action right now. Every scan re-checks each position against its stop, target, exit signal and time limit.</div>`}</section>
   <section class="section"><div class="section-head"><h2>New A+ opportunities</h2><span class="meta">${feat.length ? `${feat.length} served · ` : ""}${Math.max(0, st.max_open_positions - f.open.length)} of ${esc(st.max_open_positions)} slots free · ${money(f.cash)} cash</span></div>

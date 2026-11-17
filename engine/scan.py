@@ -59,6 +59,10 @@ def _tick(x: float, tick) -> float:
 def _write(out, writes, op, coll, did, data):
     p = out / "docs" / coll / f"{did}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
+    prev = next((x for x in writes if x["collection"] == coll and x["doc_id"] == did), None)
+    if prev is not None and op == "update":          # two updates to one doc in one run share a file: merge, never overwrite
+        p.write_text(json.dumps(clean({**json.loads(p.read_text()), **data}), default=str))
+        return
     p.write_text(json.dumps(clean(data), default=str))
     writes.append({"op": op, "collection": coll, "doc_id": did, "file_path": str(p.resolve())})
 
@@ -337,8 +341,44 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
                        f"{out['days_left']:g} days left of {hold}. ") + (DYN_TEXT.get(dyn, "") if dyn != "none" else ""))}
 
 
-def check_order(a: dict, w, part, hourly, px: dict, now: pd.Timestamp) -> dict | None:
-    """Did a resting entry order trade? Same rule as the backtest: the low must trade below the limit."""
+def window_lows(tk: str, vf: pd.Timestamp, vu: pd.Timestamp, w, part, hourly) -> dict:
+    """Lowest trade inside the order window [vf, vu) and, separately, after it.
+
+    An order that is past its window is judged on the window alone: a dip that came after the window says nothing
+    about whether the order filled in time, but it does matter if the order was left resting on the exchange."""
+    win = after = win_at = after_at = None
+    h_ok = hourly is not None and tk in hourly["low"] and len(hourly["low"])
+    if h_ok and hourly["low"].index[0] <= vf:
+        s = hourly["low"][tk].dropna()
+        a, b = s[(s.index >= vf.floor("h")) & (s.index < vu)], s[s.index >= vu]
+        if len(a):
+            win, win_at = float(a.min()), iso(a.idxmin())
+        if len(b):
+            after, after_at = float(b.min()), iso(b.idxmin())
+        return {"win": win, "win_at": win_at, "after": after, "after_at": after_at, "source": "hourly"}
+    lows_w, lows_a = [], []                    # daily bars: whole UTC days that overlap the window, then the days after
+    d0, d1 = vf.normalize(), vu.normalize()
+    if tk in w["low"]:
+        s = w["low"][tk].dropna()
+        lows_w += list(s[(s.index >= d0) & (s.index < d1)].values); lows_a += list(s[s.index >= d1].values)
+    if part is not None and tk in part["low"] and part.get("day") is not None and np.isfinite(part["low"][tk]):
+        (lows_w if d0 <= part["day"] < d1 else lows_a if part["day"] >= d1 else []).append(float(part["low"][tk]))
+    return {"win": float(min(lows_w)) if lows_w else None, "win_at": None, "after": float(min(lows_a)) if lows_a else None,
+            "after_at": None, "source": "daily"}
+
+
+def _when(ts) -> str:
+    return "" if not ts else f" (around {str(ts)[:16].replace('T', ' ')} UTC)"
+
+
+def check_order(a: dict, w, part, hourly, px: dict, now: pd.Timestamp, feed_at: pd.Timestamp | None = None) -> dict | None:
+    """Did a resting entry order trade? Same rule as the backtest: the low must trade below the limit.
+
+    Once the order's window is over the verdict is final and comes with an instruction (`action`):
+      cancel       the low inside the window never reached the limit: the order did not fill, cancel it
+      record_fill  the low inside the window was below the limit: it should have filled, record it
+      check        not provable from prices (touched the limit exactly, traded below it only after the window,
+                   or the feed has not covered the whole window yet): look at the exchange, cancel if still open"""
     try:
         vf, vu = _naive(a["valid_from"]), _naive(a["valid_until"])
     except Exception:
@@ -346,21 +386,54 @@ def check_order(a: dict, w, part, hourly, px: dict, now: pd.Timestamp) -> dict |
     if vf is None or vu is None or now < vf:
         return None
     tk, lim = a.get("ticker"), float(a.get("entry") or 0)
-    ex = extremes_since(tk, vf, w, part, hourly)
     over = now >= vu
-    out = {"alert_id": a.get("id"), "ticker": tk, "limit": lim, "low": ex["low"], "high": ex["high"], "window_over": bool(over),
-           "last": px.get(tk), "status": a.get("status") or "new"}
+    placed = (a.get("status") or "new") == "placed"
+    out = {"alert_id": a.get("id"), "ticker": tk, "limit": lim, "window_over": bool(over), "last": px.get(tk),
+           "status": a.get("status") or "new", "valid_until": iso(vu)}
+    if not over:
+        ex = extremes_since(tk, vf, w, part, hourly)
+        out.update({"low": ex["low"], "high": ex["high"]})
+        if a.get("entry_kind") == "open_next":
+            out.update({"filled": None, "text": "Market order at the open: only your exchange knows the fill."})
+        elif ex["low"] is None:
+            out.update({"filled": None, "text": "No price data for the order's window yet."})
+        elif ex["low"] < lim:
+            out.update({"filled": True, "text": f"The low since the order went live is {ex['low']:.6g}, below the limit {lim:.6g}: it should have filled{_when(ex.get('low_at'))}."})
+        else:
+            out.update({"filled": False, "text": f"The low so far is {ex['low']:.6g}, never below the limit {lim:.6g}. Still working."})
+        tgt = float(a.get("target") or 0)
+        if out.get("filled") is False and tgt and ex["high"] is not None and ex["high"] >= tgt:
+            out["withdraw"] = "Price already reached the target without filling the order: the move happened without you. Cancel the order."
+        return out
+
+    wl = window_lows(tk, vf, vu, w, part, hourly)
+    out.update({"low": wl["win"], "low_after": wl["after"], "source": wl["source"]})
+    ended = f"{str(iso(vu))[:16].replace('T', ' ')} UTC"
+    complete = feed_at is None or feed_at >= vu          # a feed pass that started before the window ended can miss its last minutes
     if a.get("entry_kind") == "open_next":
-        out.update({"filled": None, "text": "Market order at the open: only your exchange knows the fill."})
-    elif ex["low"] is None:
-        out.update({"filled": None, "text": "No price data for the order's window yet."})
-    elif ex["low"] < lim:
-        out.update({"filled": True, "text": f"The low since the order went live is {ex['low']:.6g}, below the limit {lim:.6g}: it should have filled" + (f" (around {ex['low_at'][:16].replace('T', ' ')} UTC)." if ex.get("low_at") else ".")})
+        out.update({"filled": None, "action": "check", "text": "Market order at the open: only your exchange knows the fill."})
+    elif wl["win"] is None:
+        out.update({"filled": None, "action": "check", "text": f"The order's window ended {ended} and there is no price data for it. Check the order on Coinbase: if it is still open, cancel it."})
+    elif wl["win"] < lim:
+        out.update({"filled": True, "action": "record_fill",
+                    "text": f"RECORD THE FILL: the low inside the order's window was {wl['win']:.6g}, below your limit {lim:.6g}{_when(wl['win_at'])}. It should have filled. Confirm on Coinbase and record it so the desk watches the position."})
+    elif wl["win"] == lim:
+        out.update({"filled": None, "action": "check",
+                    "text": f"CHECK ON COINBASE: the low inside the order's window was exactly your limit {lim:.6g}, so it may have filled in part or not at all. Record whatever filled, then cancel what is still open."})
+    elif not complete:
+        out.update({"filled": False, "action": "check",
+                    "text": f"The order's window ended {ended}. The low so far recorded for it is {wl['win']:.6g}, above your limit {lim:.6g}, but the price feed has not yet covered the window's last minutes. Open Coinbase now: if the order still shows as open it did not fill, so cancel it. The next scan confirms the low."})
+    elif wl["after"] is not None and wl["after"] <= lim:
+        out.update({"filled": False, "action": "check",
+                    "text": f"CANCEL THIS ORDER NOW AND CHECK IT: inside its window (ended {ended}) the low was {wl['win']:.6g}, never down to your limit {lim:.6g}, so it did not fill in time. After the window price fell to {wl['after']:.6g}{_when(wl['after_at'])}, at or below your limit. If the order was still resting on Coinbase it may have filled late: if it did, record the fill and the desk manages it with the same stop and target; if not, cancel it."})
     else:
-        out.update({"filled": False, "text": (f"The low was {ex['low']:.6g}, never below the limit {lim:.6g}. " + ("The order's day is over: it expired unfilled." if over else "Still working."))})
-    tgt, stp = float(a.get("target") or 0), float(a.get("stop") or 0)
-    if not over and out.get("filled") is False and tgt and ex["high"] is not None and ex["high"] >= tgt:
-        out["withdraw"] = "Price already reached the target without filling the order: the move happened without you. Cancel the order."
+        out.update({"filled": False, "action": "cancel", "confirmed": True,
+                    "text": (f"CANCEL THIS ORDER: confirmed unfilled. " if placed else "Expired unfilled. ")
+                            + f"The lowest trade inside the order's window was {wl['win']:.6g}, never down to your limit {lim:.6g}"
+                            + (f", and price has stayed above it since (low {wl['after']:.6g})" if wl["after"] is not None else "")
+                            + f". The window ended {ended}. "
+                            + ("Cancel the buy order on Coinbase so it cannot fill late outside the setup, then press \"I cancelled it\" on the dashboard."
+                               if placed else "If you did place this order, cancel it on Coinbase.")})
     return out
 
 
@@ -411,19 +484,33 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
 
     # ---- resting entry orders
     fill_checks, alert_updates = [], {}
+    try:
+        feed_at = pd.Timestamp(meta["generated_utc"]).tz_convert(None) if meta.get("generated_utc") else None
+    except Exception:
+        feed_at = None
     live_tickers = {t.get("ticker") for t in state["trades"].values() if t.get("status") == "open"}
     for a in state["alerts"].values():
         if a.get("type") != "entry" or a.get("status") not in ("new", "placed") or a.get("withdrawn"):
             continue
-        fc = check_order(a, w, part, hourly, px, now)
+        fc = check_order(a, w, part, hourly, px, now, feed_at)
         if fc is None:
             continue
+        if fc["window_over"]:
+            # an order never marked as placed drops off a day after its window; a placed one stays until answered
+            if a.get("status") != "placed" and now >= _naive(a["valid_until"]) + pd.Timedelta(hours=26):
+                continue
+            fill_checks.append(fc)
+            exp = {"action": fc.get("action"), "confirmed": bool(fc.get("confirmed")), "low": fc.get("low"), "low_after": fc.get("low_after"),
+                   "limit": fc["limit"], "text": fc["text"], "checked_at": iso(now)}
+            if (a.get("expiry") or {}).get("text") != exp["text"]:
+                _write(out, writes, "update", "alerts", a["id"], {"expiry": exp})
+            alert_updates[a["id"]] = {"expiry": exp, "checked_at": iso(now)}
+            continue
         fill_checks.append(fc)
-        if not fc["window_over"]:
-            live_tickers.add(a.get("ticker"))
-            last = px.get(a.get("ticker"))
-            alert_updates[a["id"]] = {"last": last, "to_entry_pct": None if not last else round(100 * (float(a["entry"]) / last - 1), 2), "checked_at": iso(now),
-                                      **({"withdrawn": True, "withdrawn_reason": fc["withdraw"]} if fc.get("withdraw") else {})}
+        live_tickers.add(a.get("ticker"))
+        last = px.get(a.get("ticker"))
+        alert_updates[a["id"]] = {"last": last, "to_entry_pct": None if not last else round(100 * (float(a["entry"]) / last - 1), 2), "checked_at": iso(now),
+                                  **({"withdrawn": True, "withdrawn_reason": fc["withdraw"]} if fc.get("withdraw") else {})}
 
     # ---- new setups (after the daily close only): every A+ setup is served, none held back
     entries, watch, near = [], [], {"coins": [], "more": 0, "waiting": []}
@@ -555,7 +642,8 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                                                            "the daily research run is pointed at the current market condition.")}
     counts = {"aplus": len([e for e in entries if not e["topup"]]), "funded": len([e for e in entries if e["funded"]]), "also_qualified": len([e for e in entries if e["also_qualified"]]),
               "topups": len([e for e in entries if e["topup"]]), "watchlist": len(watch), "radar": len(near["coins"]) + near["more"], "exit_alerts": len(exit_alerts), "open_positions": len(positions),
-              "orders_checked": len(fill_checks), "fills_likely": len([f for f in fill_checks if f.get("filled")])}
+              "orders_checked": len(fill_checks), "fills_likely": len([f for f in fill_checks if f.get("filled")]),
+              "orders_to_cancel": len([f for f in fill_checks if f["status"] == "placed" and (f.get("action") in ("cancel", "check") and f.get("window_over") or f.get("withdraw"))])}
     active = [sid for sid, r in P["strategies"].items() if r.get("enabled") and sid not in paused and (not r.get("market_conditions") or mkt["condition"] in r["market_conditions"])]
     scan = {"id": scan_id, "mode": mode, "started_at": iso(now), "status": "ok" if not errors else "partial", "data": {**health, "prices_as_of": asof, "tradable": len(scanned)},
             "market": mkt, "counts": counts, "positions": positions, "fill_checks": fill_checks, "alert_updates": alert_updates, "watchlist": watch[:20],
@@ -585,6 +673,12 @@ def headline(scan, entries) -> str:
         bits.append(f"{c['topups']} top-up")
     if acts:
         bits.append(", ".join(f"{p['ticker']} {p['label'].split(':')[0]}" for p in acts))
+    canc = [f["ticker"] for f in scan["fill_checks"] if f["status"] == "placed" and (f.get("action") == "cancel" or f.get("withdraw"))]
+    chk = [f["ticker"] for f in scan["fill_checks"] if f["status"] == "placed" and f.get("action") == "check" and f.get("window_over")]
+    if canc:
+        bits.append(f"CANCEL the {', '.join(canc)} buy order{'s' if len(canc) != 1 else ''} (unfilled)")
+    if chk:
+        bits.append(f"check the {', '.join(chk)} order on Coinbase")
     if c["fills_likely"]:
         bits.append(f"{c['fills_likely']} order{'s' if c['fills_likely'] != 1 else ''} likely filled")
     if not [b for b in bits if not b.startswith("⚠")]:
@@ -610,9 +704,16 @@ def digest(scan, entries, exit_alerts) -> str:
             L.append(f"- {p['ticker']}: {p['label']}. {p['detail']}")
     fl = scan["fill_checks"]                      # every resting order, filled or not: an order still working is part of the picture
     if fl:
-        L += ["", "YOUR RESTING ORDERS"]
-        for f in fl:
-            L.append(f"- {f['ticker']}: {f.get('withdraw') or f['text']}")
+        todo = [f for f in fl if f["status"] == "placed" and (f.get("withdraw") or (f.get("window_over") and f.get("action") in ("cancel", "check")))]
+        if todo:
+            L += ["", "ORDERS TO CANCEL OR CHECK ON COINBASE"]
+            for f in todo:
+                L.append(f"- {f['ticker']} buy limit {f['limit']:.6g}: {f.get('withdraw') or f['text']}")
+        rest = [f for f in fl if f not in todo]
+        if rest:
+            L += ["", "YOUR OTHER ORDERS"]
+            for f in rest:
+                L.append(f"- {f['ticker']}: {f.get('withdraw') or f['text']}")
     if scan["mode"] == "close":
         u, pc, rd = scan["universe"], scan["pace"], scan["radar"]
         L += ["", f"NEW A+ SETUPS ({len(entries)}) from {u['scanned']} Coinbase coins scanned ({u['core']} core, {u['wide']} wider list)"]

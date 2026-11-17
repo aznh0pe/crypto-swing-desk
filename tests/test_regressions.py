@@ -177,6 +177,40 @@ def main():
     assert SC.check_position(trade, indz, wd0, part0, None, px0, Pz, "check", now)["code"] == "HOLD"
     # 14. the book stamp changes when a zone opens or closes, so the next scan re-grades live tickets
     assert SC.book_id({**P0, "zones": {"blocked": ["slide"], "exempt": {}}}) != b0
+    # 15. an order past its window is judged on the window alone, and the verdict is an instruction
+    T = pd.Timestamp
+    hx = pd.date_range("2026-03-01", periods=96, freq="h")                     # window = all of 2026-03-02
+    lo = np.full(96, 10.5); lo[30] = 10.2                                      # lowest trade inside the window: 10.2
+    hq = {"low": pd.DataFrame({"X": lo}, index=hx), "high": pd.DataFrame({"X": lo + 0.3}, index=hx)}
+    al = {"id": "a1", "ticker": "X", "entry": 10.0, "target": 12.0, "stop": 9.0, "status": "placed",
+          "valid_from": "2026-03-02T00:00:00Z", "valid_until": "2026-03-03T00:00:00Z"}
+    late = T("2026-03-03 00:20")
+    fc = SC.check_order(al, wd, None, hq, {"X": 10.5}, late, feed_at=T("2026-03-03 00:11"))
+    assert fc["action"] == "cancel" and fc["confirmed"] and fc["filled"] is False and fc["text"].startswith("CANCEL THIS ORDER") and "10.2" in fc["text"], fc
+    fc = SC.check_order(al, wd, None, hq, {"X": 10.5}, late, feed_at=T("2026-03-02 23:55"))   # feed has not covered the last minutes: no verdict yet
+    assert fc["action"] == "check" and not fc.get("confirmed") and "CANCEL" not in fc["text"], fc
+    lo2 = lo.copy(); lo2[60] = 9.8                                             # dipped under the limit only after the window
+    hq2 = {"low": pd.DataFrame({"X": lo2}, index=hx), "high": hq["high"]}
+    fc = SC.check_order(al, wd, None, hq2, {"X": 10.5}, T("2026-03-04 13:20"), feed_at=T("2026-03-04 13:11"))
+    assert fc["action"] == "check" and fc["filled"] is False and "CANCEL THIS ORDER NOW" in fc["text"] and "late" in fc["text"], fc
+    lo3 = lo.copy(); lo3[30] = 9.9                                             # traded under the limit inside the window
+    fc = SC.check_order(al, wd, None, {"low": pd.DataFrame({"X": lo3}, index=hx), "high": hq["high"]}, {"X": 10.5}, late, feed_at=late)
+    assert fc["action"] == "record_fill" and fc["filled"] is True, fc
+    lo4 = lo.copy(); lo4[30] = 10.0                                            # touched the limit exactly: nobody can tell from prices
+    fc = SC.check_order(al, wd, None, {"low": pd.DataFrame({"X": lo4}, index=hx), "high": hq["high"]}, {"X": 10.5}, late, feed_at=late)
+    assert fc["action"] == "check" and fc["filled"] is None, fc
+    fc = SC.check_order({**al, "status": "new"}, wd, None, hq, {"X": 10.5}, late, feed_at=late)   # never marked placed: no shouting
+    assert fc["action"] == "cancel" and fc["text"].startswith("Expired unfilled"), fc
+    di = pd.date_range("2026-03-01", "2026-03-03", freq="D")                   # daily bars only: the window's own day decides
+    wdd = {"low": pd.DataFrame({"X": [9.0, 10.2, 9.5]}, index=di), "high": pd.DataFrame({"X": [11.0, 11.0, 11.0]}, index=di)}
+    wl = SC.window_lows("X", T("2026-03-02"), T("2026-03-03"), wdd, None, None)
+    assert wl["win"] == 10.2 and wl["after"] == 9.5, wl
+    fc = SC.check_order(al, wd, None, hq, {"X": 10.5}, T("2026-03-02 13:00"))  # still inside the window: no instruction
+    assert fc["window_over"] is False and "action" not in fc and fc["text"].endswith("Still working."), fc
+    # a run that updates one alert twice keeps both updates
+    wr, od = [], pathlib.Path(tempfile.mkdtemp())
+    SC._write(od, wr, "update", "alerts", "a1", {"win_pct": 67}); SC._write(od, wr, "update", "alerts", "a1", {"expiry": {"action": "cancel"}})
+    assert len(wr) == 1 and json.loads(pathlib.Path(wr[0]["file_path"]).read_text()) == {"win_pct": 67, "expiry": {"action": "cancel"}}
     print("regression tests passed")
 
 
