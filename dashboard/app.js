@@ -191,7 +191,7 @@ function marketPanel() {
   const m = sc.market, P = S.params, T = P?.grade_table || {}, TW = P?.grade_table_wide || {}, specs = S.backtest?.strategies || {};
   const ap = [...new Set([...Object.keys(T), ...Object.keys(TW)])].filter((s) => P.strategies?.[s]?.enabled && !P.retired?.[s] && (!(P.strategies[s].market_conditions || []).length || P.strategies[s].market_conditions.includes(m.condition))
     && (T[s]?.[m.condition]?.grade === "A+" || TW[s]?.[m.condition]?.grade === "A+")).map((s) => ({ s }));
-  return `<div class="panel">${m.zone_blocked ? `<div class="banner warn" style="margin-bottom:12px"><b>${esc((m.zone_note || "Danger zone: no A+ alerts are sent.").replace(/\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/g, (id) => specs[id]?.label || id))}</b> Open positions and resting orders keep their own stops, targets and time limits.</div>` : ""}<div class="grid g-kpi" style="margin-bottom:10px">
+  return `<div class="panel">${m.zone_blocked ? `<div class="banner warn" style="margin-bottom:12px"><b>${esc((m.zone_note || "Danger zone: no A+ alerts are sent.").replace(/\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b/g, (id) => specs[id]?.label || id))}</b> Open positions and resting orders are re-checked against this zone at every scan: act on what their cards say.</div>` : ""}<div class="grid g-kpi" style="margin-bottom:10px">
     ${kpi("Market condition", esc(m.label), m.bull ? "Bitcoin above its 200-day average" : "Bitcoin below its 200-day average")}
     ${kpi("Bitcoin", (m.btc_now || m.btc) ? "$" + Math.round(m.btc_now || m.btc).toLocaleString("en-US") : "–", `${spct(m.btc_vs_200d_pct)} vs 200-day · ${spct(m.btc_7d_pct)} in 7 days`)}
     ${kpi("Breadth", m.breadth_above_50d_pct != null ? pct(m.breadth_above_50d_pct, 0) : "–", "Liquid coins above their 50-day")}
