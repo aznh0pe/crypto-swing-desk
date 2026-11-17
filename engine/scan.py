@@ -114,6 +114,7 @@ def market_now(ind, px: dict | None = None) -> dict:
     return {"condition": cond, "label": I.CONDITION_LABEL.get(cond, "Unknown"), "bull": bool(mk["bull"] >= 0.5), "stress": bool(mk["stress"] >= 0.5),
             "btc": f("btc", 2), "btc_now": None if not (px or {}).get("BTC") else round(float(px["BTC"]), 2),
             "washed_pct": None if f("washed") is None else round(100 * f("washed")), "flush7_pct": None if f("flush7") is None else round(100 * f("flush7")),
+"zone": I.zone_of(mk.get("btc_dist200")), "zone_label": I.ZONE_LABEL[I.zone_of(mk.get("btc_dist200"))],
             "btc_vs_200d_pct": None if f("btc_dist200") is None else round(100 * f("btc_dist200"), 1),
             "btc_vs_50d_pct": None if f("btc_dist50") is None else round(100 * f("btc_dist50"), 1),
             "btc_7d_pct": None if f("btc_ret7") is None else round(100 * f("btc_ret7"), 1),
@@ -192,6 +193,17 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
         e["also_by"] = [x for x in agree.get(tk, []) if x != e["strategy_label"]]
         if e["grade"] == "A+" and k > 1:
             e["score"] = round(e["score"] + CONFLUENCE_BONUS * (min(k, 3) - 1), 1)
+    zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
+    zs = P.get("zones") or {}
+    if zone in (zs.get("blocked") or []):          # danger zone: the A+ book loses here, so nothing is sent as A+
+        held = [e["ticker"] for e in best.values() if e["grade"] == "A+"]
+        for e in best.values():
+            if e["grade"] == "A+":
+                e["grade"], e["zone_blocked"] = "A", True
+        row = (zs.get("table") or {}).get(zone) or {}
+        notes.append(f"Danger zone: {I.ZONE_LABEL[zone]}. A+ setups in this zone won {100 * row['train']['win_rate']:.0f}% in the training years and {100 * row['unseen']['win_rate']:.0f}% on unseen data "
+                     f"({row['all']['trades']} trades, {row['all']['days']} days), so none are sent until Bitcoin leaves it"
+                     + (f". Moved to the watchlist: {', '.join(held)}." if held else "."))
     out = sorted(best.values(), key=lambda e: (e["grade"] != "A+", -e["score"]))
     return out, notes
 
@@ -338,6 +350,11 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     gov = risk_governor(state, fund["capital"])
     px, asof = live_prices(w, part, hourly)
     mkt = market_now(ind, px)
+    mkt["zone_blocked"] = mkt["zone"] in ((P.get("zones") or {}).get("blocked") or [])
+    if mkt["zone_blocked"]:
+        zr = ((P.get("zones") or {}).get("table") or {}).get(mkt["zone"]) or {}
+        mkt["zone_note"] = (f"Danger zone: {mkt['zone_label']}. A+ setups here won {100 * zr['train']['win_rate']:.0f}% in training and {100 * zr['unseen']['win_rate']:.0f}% on unseen data, "
+                            "so no A+ alerts are sent until Bitcoin climbs back within 10% of its 200-day average or falls more than 35% under it.") if zr else "Danger zone."
     writes, notes, errors = [], list(health["notes"]), []
     scan_id = now.strftime("%Y%m%d-%H%M") + f"-{mode}"
 
@@ -517,7 +534,7 @@ def headline(scan, entries) -> str:
         bits.append(f"{c['fills_likely']} order{'s' if c['fills_likely'] != 1 else ''} likely filled")
     if not [b for b in bits if not b.startswith("⚠")]:
         if scan["mode"] == "close":
-            bits.append(f"No A+ setups today from {scan['universe']['scanned']} coins" + (f", {c['radar']} close" if c.get("radar") else ""))
+            bits.append(("Danger zone: no A+ alerts" if scan["market"].get("zone_blocked") else f"No new A+ setups from {scan['universe']['scanned']} coins") + (f", {c['radar']} close" if c.get("radar") and not scan["market"].get("zone_blocked") else ""))
         else:
             bits.append("No action needed")
     return " · ".join(b for b in bits if b) + f" · market {m['label']}"
@@ -536,7 +553,7 @@ def digest(scan, entries, exit_alerts) -> str:
         L += ["", "ACTION ON OPEN POSITIONS"]
         for p in acts:
             L.append(f"- {p['ticker']}: {p['label']}. {p['detail']}")
-    fl = [f for f in scan["fill_checks"] if f.get("filled") or f.get("withdraw")]
+    fl = scan["fill_checks"]                      # every resting order, filled or not: an order still working is part of the picture
     if fl:
         L += ["", "YOUR RESTING ORDERS"]
         for f in fl:
@@ -545,7 +562,7 @@ def digest(scan, entries, exit_alerts) -> str:
         u, pc, rd = scan["universe"], scan["pace"], scan["radar"]
         L += ["", f"NEW A+ SETUPS ({len(entries)}) from {u['scanned']} Coinbase coins scanned ({u['core']} core, {u['wide']} wider list)"]
         if not entries:
-            L.append("None today. The filter only passes setups whose record in this market condition is strong in training and on unseen data.")
+            L.append(scan["market"].get("zone_note") or "No new ones. The filter only passes setups whose record in this market condition is strong in training and on unseen data.")
         for e in entries:
             L += [f"- {e['ticker']} | {e['strategy_label']} | {'TOP-UP (grade A)' if e['topup'] else 'A+'}{'' if e['tier'] == 'core' else ' | wider list'}{'' if e.get('confluence', 1) < 2 else ' | ' + str(e['confluence']) + ' strategies agree'} | score {e['score']} | win odds {e['win_pct']:.0f}%"
                   + ("" if e["funded"] else " | no free slot or cash right now"),

@@ -253,7 +253,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_STRONG_BULL_DIP": {
    "spec": {
@@ -305,7 +305,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_THREE_DOWN_UPTREND": {
    "spec": {
@@ -352,7 +352,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_BREADTH_WASHOUT": {
    "spec": {
@@ -398,7 +398,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_BEAR_OVERSOLD_MAJORS": {
    "spec": {
@@ -446,7 +446,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_DEEP_BEAR_DIP": {
    "spec": {
@@ -493,7 +493,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_MARKET_WASHOUT": {
    "spec": {
@@ -540,7 +540,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   },
   "R_FLUSH_WITH_MARKET": {
    "spec": {
@@ -588,7 +588,7 @@
      ]
     }
    },
-   "promoted_at": "2026-11-16T15:48:11Z"
+   "promoted_at": "2026-11-17T02:17:56Z"
   }
  },
  "retired": {
@@ -847,7 +847,7 @@
   },
   "R_BREADTH_WASHOUT": {
    "bull_calm": {
-    "p": 0.7524,
+    "p": 0.7382,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -859,19 +859,19 @@
     "grade": "B"
    },
    "bull_stress": {
-    "p": 0.7524,
-    "n": 311,
+    "p": 0.7382,
+    "n": 317,
     "days": 61,
-    "day_win": 0.77,
-    "avg_ret": 0.0548,
+    "day_win": 0.754,
+    "avg_ret": 0.0516,
     "train": 0.772,
     "train_n": 127,
-    "oos": 0.739,
-    "oos_n": 184,
+    "oos": 0.716,
+    "oos_n": 190,
     "grade": "A+"
    },
    "bear_calm": {
-    "p": 0.7524,
+    "p": 0.7382,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -883,7 +883,7 @@
     "grade": "B"
    },
    "bear_stress": {
-    "p": 0.7524,
+    "p": 0.7382,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1191,7 +1191,7 @@
   },
   "LEADER_PULLBACK": {
    "bull_calm": {
-    "p": 0.6986,
+    "p": 0.6892,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1201,17 +1201,17 @@
     "grade": "B"
    },
    "bull_stress": {
-    "p": 0.6986,
-    "n": 73,
-    "days": 46,
-    "day_win": 0.717,
-    "avg_ret": 0.0682,
-    "late": 0.622,
+    "p": 0.6892,
+    "n": 74,
+    "days": 47,
+    "day_win": 0.702,
+    "avg_ret": 0.0636,
+    "late": 0.595,
     "core_grade": "A",
     "grade": "A+"
    },
    "bear_calm": {
-    "p": 0.6986,
+    "p": 0.6892,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1221,7 +1221,7 @@
     "grade": "B"
    },
    "bear_stress": {
-    "p": 0.6986,
+    "p": 0.6892,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1359,7 +1359,7 @@
   },
   "R_BREADTH_WASHOUT": {
    "bull_calm": {
-    "p": 0.7545,
+    "p": 0.7293,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1369,17 +1369,17 @@
     "grade": "B"
    },
    "bull_stress": {
-    "p": 0.7545,
-    "n": 220,
+    "p": 0.7293,
+    "n": 229,
     "days": 30,
-    "day_win": 0.733,
-    "avg_ret": 0.0563,
-    "late": 0.773,
+    "day_win": 0.7,
+    "avg_ret": 0.0512,
+    "late": 0.713,
     "core_grade": "A+",
     "grade": "A+"
    },
    "bear_calm": {
-    "p": 0.7545,
+    "p": 0.7293,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1389,7 +1389,7 @@
     "grade": "B"
    },
    "bear_stress": {
-    "p": 0.7545,
+    "p": 0.7293,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1610,27 +1610,123 @@
    }
   }
  },
+ "zones": {
+  "blocked": [
+   "slide"
+  ],
+  "table": {
+   "bull": {
+    "label": "Bitcoin above its 200-day average",
+    "all": {
+     "trades": 3200,
+     "days": 354,
+     "win_rate": 0.734,
+     "avg_ret": 0.0475
+    },
+    "train": {
+     "trades": 748,
+     "days": 169,
+     "win_rate": 0.769,
+     "avg_ret": 0.0436
+    },
+    "unseen": {
+     "trades": 2452,
+     "days": 185,
+     "win_rate": 0.723,
+     "avg_ret": 0.0486
+    },
+    "blocked": false
+   },
+   "shallow": {
+    "label": "Bitcoin 0 to 10% under its 200-day average",
+    "all": {
+     "trades": 629,
+     "days": 16,
+     "win_rate": 0.851,
+     "avg_ret": 0.0664
+    },
+    "train": {
+     "trades": 39,
+     "days": 8,
+     "win_rate": 0.615,
+     "avg_ret": 0.0586
+    },
+    "unseen": {
+     "trades": 590,
+     "days": 8,
+     "win_rate": 0.866,
+     "avg_ret": 0.0669
+    },
+    "blocked": false
+   },
+   "slide": {
+    "label": "Bitcoin 10 to 35% under its 200-day average",
+    "all": {
+     "trades": 755,
+     "days": 70,
+     "win_rate": 0.499,
+     "avg_ret": -0.0172
+    },
+    "train": {
+     "trades": 522,
+     "days": 48,
+     "win_rate": 0.464,
+     "avg_ret": -0.0212
+    },
+    "unseen": {
+     "trades": 233,
+     "days": 22,
+     "win_rate": 0.579,
+     "avg_ret": -0.0084
+    },
+    "blocked": true
+   },
+   "deep": {
+    "label": "Bitcoin more than 35% under its 200-day average",
+    "all": {
+     "trades": 441,
+     "days": 32,
+     "win_rate": 0.909,
+     "avg_ret": 0.145
+    },
+    "train": {
+     "trades": 333,
+     "days": 31,
+     "win_rate": 0.889,
+     "avg_ret": 0.1488
+    },
+    "unseen": {
+     "trades": 108,
+     "days": 1,
+     "win_rate": 0.972,
+     "avg_ret": 0.1334
+    },
+    "blocked": false
+   }
+  },
+  "rule": "A zone is blocked when A+ setups there won under 58% with an average trade under +0.4%, in the training years and on unseen data alike, on 150+ trades over 30+ days. Re-tested at every calibration."
+ },
  "confluence": [
   {
    "agree": "1 strategy",
-   "trades": 2758,
-   "win_rate": 0.72,
-   "avg_ret": 0.0419,
-   "days": 200
+   "trades": 2548,
+   "win_rate": 0.73,
+   "avg_ret": 0.0462,
+   "days": 180
   },
   {
    "agree": "2 strategies",
-   "trades": 393,
-   "win_rate": 0.865,
-   "avg_ret": 0.0789,
-   "days": 63
+   "trades": 387,
+   "win_rate": 0.866,
+   "avg_ret": 0.0785,
+   "days": 60
   },
   {
    "agree": "3 or more",
-   "trades": 217,
-   "win_rate": 0.908,
-   "avg_ret": 0.1194,
-   "days": 25
+   "trades": 215,
+   "win_rate": 0.902,
+   "avg_ret": 0.1171,
+   "days": 24
   }
  ],
  "topup": {
@@ -1639,47 +1735,47 @@
   "tried": [
    {
     "floor": 0.58,
-    "trades": 133,
-    "win_rate": 0.4511,
-    "avg_ret": -0.01891,
-    "profit_factor": 0.597,
-    "day_win_rate": 0.4554,
-    "weeks_at_min": 0.53,
-    "per_week": 37.17
+    "trades": 150,
+    "win_rate": 0.4733,
+    "avg_ret": -0.01576,
+    "profit_factor": 0.655,
+    "day_win_rate": 0.488,
+    "weeks_at_min": 0.515,
+    "per_week": 30.47
    },
    {
     "floor": 0.6,
-    "trades": 133,
-    "win_rate": 0.4511,
-    "avg_ret": -0.01891,
-    "profit_factor": 0.597,
-    "day_win_rate": 0.4554,
-    "weeks_at_min": 0.53,
-    "per_week": 37.17
+    "trades": 150,
+    "win_rate": 0.4733,
+    "avg_ret": -0.01576,
+    "profit_factor": 0.655,
+    "day_win_rate": 0.488,
+    "weeks_at_min": 0.515,
+    "per_week": 30.47
    },
    {
     "floor": 0.62,
-    "trades": 133,
-    "win_rate": 0.4511,
-    "avg_ret": -0.01891,
-    "profit_factor": 0.597,
-    "day_win_rate": 0.4554,
-    "weeks_at_min": 0.53,
-    "per_week": 37.17
+    "trades": 150,
+    "win_rate": 0.4733,
+    "avg_ret": -0.01576,
+    "profit_factor": 0.655,
+    "day_win_rate": 0.488,
+    "weeks_at_min": 0.515,
+    "per_week": 30.47
    },
    {
     "floor": 0.64,
-    "trades": 27,
-    "win_rate": 0.4444,
-    "avg_ret": -0.01085,
-    "profit_factor": 0.777,
-    "day_win_rate": 0.4583,
-    "weeks_at_min": 0.446,
-    "per_week": 36.31
+    "trades": 44,
+    "win_rate": 0.5227,
+    "avg_ret": -0.00322,
+    "profit_factor": 0.926,
+    "day_win_rate": 0.5676,
+    "weeks_at_min": 0.431,
+    "per_week": 29.6
    }
   ],
   "note": "Top-ups are off: no grade-A rule won 62%+ with a +0.4% average trade on unseen data. The weekly pace is served by A+ setups only."
  },
- "calibrated_at": "2026-11-16T15:48:11Z",
- "data_through": "2026-11-15"
+ "calibrated_at": "2026-11-17T02:17:56Z",
+ "data_through": "2026-11-16"
 }

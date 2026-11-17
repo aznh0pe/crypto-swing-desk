@@ -215,6 +215,34 @@ def confluence_report(ap: pd.DataFrame, split: str) -> list:
     return out
 
 
+ZONE_RULE = {"min_n": 150, "min_days": 30, "win": 0.58, "avg": 0.004}
+
+
+def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict]:
+    """Danger zones. A+ results are split by where Bitcoin sits against its 200-day average; a zone where the A+ book
+    wins under 58% with no real average gain, on enough trades and days, in training AND on unseen data, is blocked:
+    its setups drop to the watchlist until a calibration shows the zone winning again."""
+    g = g.copy()
+    d = ind["market"]["btc_dist200"].reindex(pd.to_datetime(g["signal_date"])).values
+    g["zone"] = [I.zone_of(x) for x in d]
+    ap = one_per_coin(bt.done(g[g["grade"] == "A+"]))
+    cut, R, table, blocked = pd.Timestamp(P["split"]), ZONE_RULE, {}, []
+    for name, lo, hi, label in I.ZONES:
+        x = ap[ap["zone"] == name]
+        row = {"label": label}
+        for key, y in (("all", x), ("train", x[x["signal_date"] < cut]), ("unseen", x[x["signal_date"] >= cut])):
+            row[key] = {"trades": int(len(y)), "days": int(y["signal_date"].nunique()), "win_rate": round(float((y["ret"] > 0).mean()), 3) if len(y) else None,
+                        "avg_ret": round(float(y["ret"].mean()), 4) if len(y) else None}
+        bad = lambda s: s["trades"] and s["win_rate"] < R["win"] and s["avg_ret"] < R["avg"]
+        row["blocked"] = bool(row["all"]["trades"] >= R["min_n"] and row["all"]["days"] >= R["min_days"] and bad(row["all"]) and bad(row["train"]) and bad(row["unseen"]))
+        if row["blocked"]:
+            blocked.append(name)
+        table[name] = row
+    g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked), "grade"] = "A"
+    return g, {"blocked": blocked, "table": table,
+               "rule": f"A zone is blocked when A+ setups there won under {100 * R['win']:.0f}% with an average trade under +{100 * R['avg']:.1f}%, in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. Re-tested at every calibration."}
+
+
 def one_per_coin(t: pd.DataFrame) -> pd.DataFrame:
     """One setup per coin and day, the best-scored, as the scanner sends them."""
     return t.sort_values(["score", "p"], ascending=False).drop_duplicates(["signal_date", "ticker"])
@@ -370,12 +398,14 @@ def run_backtest(data_dir, state_params: dict | None = None, extra_specs: list |
                         "and only where the strategy has already earned A or A+ on the core list. A = 58%+: watchlist only. When several A+ strategies flag the same coin on the same day, it ranks first.")}
     pace, universe = {}, {}
     if len(allt):
-        g = add_confluence(apply_grades(allt, table, table_w))
+        g, zones = apply_zones(add_confluence(apply_grades(allt, table, table_w)), ind, P)
+        P["zones"] = zones
         done_g = bt.done(g)
         ap = done_g[done_g["grade"] == "A+"]
         grading["aplus"] = {**bt.stats(ap), "by_year": bt.yearly(ap), "by_condition": bt.by_condition(ap)}
         grading["aplus_core"], grading["aplus_wide"] = bt.stats(tier_of(ap, "core")), bt.stats(tier_of(ap, "wide"))
         grading["confluence"] = confluence_report(ap, P["split"])
+        grading["zones"] = zones
         P["confluence"] = grading["confluence"]
         core_all = tier_of(allt, "core")
         honest = apply_grades(core_all, grade_table(core_all, P["split"], G, train_only=True))

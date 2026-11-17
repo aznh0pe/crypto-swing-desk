@@ -129,6 +129,26 @@ def compute(w: dict, fng: pd.Series | None = None, min_dv: float = MIN_DV) -> di
     return ind
 
 
+ZONES = [("bull", 0.0, 9.9, "Bitcoin above its 200-day average"), ("shallow", -0.10, 0.0, "Bitcoin 0 to 10% under its 200-day average"),
+         ("slide", -0.35, -0.10, "Bitcoin 10 to 35% under its 200-day average"), ("deep", -9.9, -0.35, "Bitcoin more than 35% under its 200-day average")]
+ZONE_LABEL = {z[0]: z[3] for z in ZONES}
+
+
+def zone_of(dist200) -> str:
+    """Where Bitcoin sits against its 200-day average. The middle of a bear market (the slide) behaves unlike its
+    start and unlike its capitulation, so results are tracked per zone and a zone that loses is switched off."""
+    try:
+        d = float(dist200)
+    except (TypeError, ValueError):
+        return "bull"
+    if d != d:
+        return "bull"
+    for name, lo, hi, _ in ZONES:
+        if lo < d <= hi:
+            return name
+    return "bull"
+
+
 def condition_series(mk: pd.DataFrame) -> pd.Series:
     bull, stress = mk["bull"], mk["stress"] >= 0.5
     s = pd.Series(np.where(bull >= 0.5, np.where(stress, "bull_stress", "bull_calm"),

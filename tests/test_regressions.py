@@ -144,6 +144,20 @@ def main():
 
     # 11. the radar explains what is missing in plain words
     assert rules.plain_condition("ret7 <= -0.3")[0] == "7-day change at or below -30.0%" and rules.plain_condition("rsi2 < 8")[0] == "RSI(2) below 8"
+    # 12. danger zones: the middle of a bear market is its own zone, and a blocked zone sends no A+ alert (2026-11-17)
+    assert [I.zone_of(x) for x in (0.05, -0.05, -0.11, -0.34, -0.36, float("nan"))] == ["bull", "shallow", "slide", "slide", "deep", "bull"]
+    Pz = S.load_params(None)
+    indz = I.compute(D.load_daily(w / "data")[0], None, min_dv=Pz["universe"]["min_dv"])
+    zone = I.zone_of(indz["market"]["btc_dist200"].iloc[-1])
+    sid = next(k for k, v in Pz["strategies"].items() if v.get("enabled"))
+    all_a = {c: {"p": 0.9, "n": 99, "days": 30, "grade": "A+"} for c in I.CONDITIONS}
+    Pz["grade_table"] = {k: dict(all_a) for k in Pz["strategies"]}
+    Pz["grade_table_wide"] = {k: dict(all_a) for k in Pz["strategies"]}
+    open_found, _ = SC.find_entries(indz, Pz, {}, I.condition_series(indz["market"]).iloc[-1] if hasattr(I, "condition_series") else "bull_calm", {})
+    Pz["zones"] = {"blocked": [zone], "table": {zone: {"train": {"win_rate": 0.46}, "unseen": {"win_rate": 0.58}, "all": {"trades": 755, "days": 70}}}}
+    blocked_found, notes = SC.find_entries(indz, Pz, {}, I.condition_series(indz["market"]).iloc[-1] if hasattr(I, "condition_series") else "bull_calm", {})
+    assert not [e for e in blocked_found if e["grade"] == "A+"] and len(blocked_found) == len(open_found)
+    assert any("Danger zone" in n for n in notes)
     print("regression tests passed")
 
 

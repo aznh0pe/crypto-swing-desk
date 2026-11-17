@@ -459,7 +459,7 @@ function pacePanel() {
   const hist = B?.pace?.last_52_weeks, tu = B?.pace?.topup;
   const near = rd?.coins || [], wait = rd?.waiting || [];
   return `<section class="section"><div class="section-head"><h2>Pace and radar</h2><span class="meta">Every A+ setup is served, none held back</span></div>
-    <div class="grid g-kpi">
+    ${m.zone_blocked ? `<div class="banner warn" style="margin-bottom:12px"><b>${esc(m.zone_note || "Danger zone: no A+ alerts are sent.")}</b> Open positions and resting orders keep their own stops, targets and time limits.</div>` : ""}<div class="grid g-kpi">
       ${pc ? kpi("A+ setups this week", `${esc(pc.served)}`, `Pace ${esc(pc.target_by_now)} by today · minimum ${esc(pc.min_week)} a week${pc.behind ? " · " + `<b class="caution-word">behind</b>` : ""}`) : ""}
       ${u ? kpi("Coins scanned", esc(u.scanned), `${esc(u.core)} core · ${esc(u.wide)} wider list · of ${esc(u.listed)} on Coinbase`) : ""}
       ${kpi("One condition away", String(near.length + (rd?.more || 0)), near.length ? "Coins closest to an A+ signal" : "Nothing is close today")}
@@ -796,6 +796,12 @@ function viewLab() {
     ${(G.confluence || []).length > 1 ? `<div class="tbl-wrap"><table><thead><tr><th>A+ strategies that flag the same coin on the same day (unseen years)</th>${G.confluence.map((z) => `<th class="n">${esc(z.agree)}</th>`).join("")}</tr></thead><tbody>
       <tr><td>Win rate</td>${G.confluence.map((z) => `<td class="n">${pct(100 * z.win_rate, 0)}</td>`).join("")}</tr><tr><td>Average trade</td>${G.confluence.map((z) => `<td class="n">${spct(100 * z.avg_ret)}</td>`).join("")}</tr>
       <tr><td>Trades · separate days</td>${G.confluence.map((z) => `<td class="n">${esc(z.trades)} · ${esc(z.days)}</td>`).join("")}</tr></tbody></table></div><p class="small muted">Agreement is the strongest ranking signal the desk has measured, so setups confirmed by several strategies are ranked, and funded, first.</p>` : ""}
+    ${G.zones?.table ? `<div class="tbl-wrap"><table><thead><tr><th>A+ setups by where Bitcoin sits against its 200-day average</th>${Object.values(G.zones.table).map((z) => `<th class="n">${esc(z.label.replace("Bitcoin ", "").replace(" its 200-day average", ""))}</th>`).join("")}</tr></thead><tbody>
+      <tr><td>Win rate, training years</td>${Object.values(G.zones.table).map((z) => `<td class="n">${z.train.win_rate != null ? pct(100 * z.train.win_rate, 0) : "–"}</td>`).join("")}</tr>
+      <tr><td>Win rate, unseen years</td>${Object.values(G.zones.table).map((z) => `<td class="n">${z.unseen.win_rate != null ? pct(100 * z.unseen.win_rate, 0) : "–"}</td>`).join("")}</tr>
+      <tr><td>Average trade, all years</td>${Object.values(G.zones.table).map((z) => `<td class="n">${z.all.avg_ret != null ? spct(100 * z.all.avg_ret) : "–"}</td>`).join("")}</tr>
+      <tr><td>Trades · separate days</td>${Object.values(G.zones.table).map((z) => `<td class="n">${esc(z.all.trades)} · ${esc(z.all.days)}</td>`).join("")}</tr>
+      <tr><td>Status</td>${Object.values(G.zones.table).map((z) => `<td class="n">${z.blocked ? pill("crit", "blocked") : pill("good", "open")}</td>`).join("")}</tr></tbody></table></div><p class="small muted">${esc(G.zones.rule || "")} The figures for a blocked zone are from before the block; the A+ record above no longer counts them.</p>` : ""}
     ${U.probe?.note ? `<div class="banner info" style="margin-bottom:12px"><b>Coin-list check:</b> ${esc(U.probe.note)}</div>` : ""}
     ${(U.bands || []).length ? `<div class="tbl-wrap"><table><thead><tr><th>A+ setups by how much the coin trades a day (unseen years)</th>${U.bands.map((z) => `<th class="n">${esc(z.band)}</th>`).join("")}</tr></thead><tbody>
       <tr><td>Win rate</td>${U.bands.map((z) => `<td class="n">${pct(100 * z.win_rate, 0)}</td>`).join("")}</tr><tr><td>Average trade</td>${U.bands.map((z) => `<td class="n">${spct(100 * z.avg_ret)}</td>`).join("")}</tr>
