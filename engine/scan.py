@@ -387,7 +387,7 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
         zr = ((P.get("zones") or {}).get("table") or {}).get(mkt["zone"]) or {}
         mkt["zone_note"] = (f"Danger zone: {mkt['zone_label']}. A+ setups here won {100 * zr['train']['win_rate']:.0f}% in training and {100 * zr['unseen']['win_rate']:.0f}% on unseen data, "
                             "so alerts are sent only for strategies with their own A+ record in this zone"
-                            + (": " + ", ".join(sorted(((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) or {})) .replace("|core", " (core coins)").replace("|wide", " (wider list)") + "." if ((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) else " (none yet).")) if zr else "Danger zone."
+                            + (": " + ", ".join(f"{(S.all_specs(P).get(k.split('|')[0]) or {}).get('label', k.split('|')[0])} ({'core coins' if k.endswith('|core') else 'wider list'})" for k in sorted(((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) or {})) + "." if ((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) else " (none yet).")) if zr else "Danger zone."
     writes, notes, errors = [], list(health["notes"]), []
     scan_id = now.strftime("%Y%m%d-%H%M") + f"-{mode}"
 
