@@ -1,5 +1,5 @@
 {
- "rev": 7,
+ "rev": 8,
  "split": "2023-01-01",
  "costs": {
   "maker_pct": 0.5,
@@ -135,7 +135,8 @@
    "params": {
     "r": 20,
     "m": 0.18,
-    "k": 0.25
+    "k": 0.25,
+    "cap": 0.25
    },
    "market_conditions": [],
    "mode": "all"
@@ -260,7 +261,7 @@
     "id": "R_STRONG_BULL_DIP",
     "label": "Dip in a Surging Bull",
     "family": "Mean reversion",
-    "about": "Bitcoin is up strongly over the last 30 days and above its 200-day average, and a liquid coin has a sharp three-day pullback. In a market being bought this hard, dips are bought quickly: bid below the close and sell the first close back above the 5-day average.",
+    "about": "Bitcoin is up strongly over the last 30 days and above its 200-day average, and a liquid coin has a sharp three-day pullback. In a market being bought this hard, dips are bought quickly: bid below the close and sell the first close back above the 5-day average. Not when Bitcoin is stretched more than 25% above its 50-day average: an overheated market stops buying dips.",
     "source": {
      "title": "Crypto Swing Desk own design (2026-11-16)",
      "url": "https://github.com/aznh0pe/crypto-swing-desk"
@@ -270,7 +271,8 @@
      "rsi2 < {r}",
      "ret3 <= -0.05",
      "btc_ret30 >= {m}",
-     "btc_above200 > 0.5"
+     "btc_above200 > 0.5",
+     "btc_dist50 <= {cap}"
     ],
     "entry": {
      "kind": "limit_next",
@@ -288,7 +290,8 @@
     "params": {
      "r": 20,
      "m": 0.15,
-     "k": 0.5
+     "k": 0.5,
+     "cap": 0.25
     },
     "grid": {
      "r": [
@@ -302,8 +305,13 @@
      "k": [
       0.25,
       0.5
+     ],
+     "cap": [
+      0.25,
+      9.0
      ]
-    }
+    },
+    "rev": 2
    },
    "promoted_at": "2026-11-17T02:17:56Z"
   },
@@ -1047,31 +1055,31 @@
   },
   "R_STRONG_BULL_DIP": {
    "bull_calm": {
-    "p": 0.6915,
-    "n": 911,
-    "days": 154,
-    "day_win": 0.701,
-    "avg_ret": 0.0215,
-    "train": 0.706,
-    "train_n": 333,
-    "oos": 0.682,
-    "oos_n": 578,
+    "p": 0.7741,
+    "n": 715,
+    "days": 108,
+    "day_win": 0.759,
+    "avg_ret": 0.0398,
+    "train": 0.785,
+    "train_n": 219,
+    "oos": 0.768,
+    "oos_n": 496,
     "grade": "A+"
    },
    "bull_stress": {
-    "p": 0.9118,
-    "n": 254,
-    "days": 46,
-    "day_win": 0.891,
-    "avg_ret": 0.0962,
-    "train": 0.961,
-    "train_n": 102,
-    "oos": 0.901,
-    "oos_n": 152,
+    "p": 0.8891,
+    "n": 161,
+    "days": 29,
+    "day_win": 0.897,
+    "avg_ret": 0.0881,
+    "train": 0.949,
+    "train_n": 79,
+    "oos": 0.854,
+    "oos_n": 82,
     "grade": "A+"
    },
    "bear_calm": {
-    "p": 0.7416,
+    "p": 0.7968,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1083,7 +1091,7 @@
     "grade": "B"
    },
    "bear_stress": {
-    "p": 0.7416,
+    "p": 0.7968,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1527,27 +1535,27 @@
   },
   "R_STRONG_BULL_DIP": {
    "bull_calm": {
-    "p": 0.6339,
-    "n": 1112,
-    "days": 124,
-    "day_win": 0.589,
-    "avg_ret": 0.0204,
-    "late": 0.633,
+    "p": 0.6774,
+    "n": 985,
+    "days": 107,
+    "day_win": 0.617,
+    "avg_ret": 0.0287,
+    "late": 0.588,
     "core_grade": "A+",
-    "grade": "A"
+    "grade": "A+"
    },
    "bull_stress": {
-    "p": 0.8424,
-    "n": 306,
-    "days": 45,
-    "day_win": 0.711,
-    "avg_ret": 0.0867,
-    "late": 0.837,
+    "p": 0.7454,
+    "n": 146,
+    "days": 27,
+    "day_win": 0.593,
+    "avg_ret": 0.0559,
+    "late": 0.74,
     "core_grade": "A+",
     "grade": "A+"
    },
    "bear_calm": {
-    "p": 0.6805,
+    "p": 0.687,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1557,7 +1565,7 @@
     "grade": "B"
    },
    "bear_stress": {
-    "p": 0.6805,
+    "p": 0.687,
     "n": 0,
     "days": 0,
     "day_win": 0.0,
@@ -1618,22 +1626,22 @@
    "bull": {
     "label": "Bitcoin above its 200-day average",
     "all": {
-     "trades": 3200,
-     "days": 354,
-     "win_rate": 0.734,
-     "avg_ret": 0.0475
+     "trades": 3781,
+     "days": 340,
+     "win_rate": 0.725,
+     "avg_ret": 0.0441
     },
     "train": {
-     "trades": 748,
-     "days": 169,
-     "win_rate": 0.769,
-     "avg_ret": 0.0436
+     "trades": 648,
+     "days": 123,
+     "win_rate": 0.802,
+     "avg_ret": 0.0527
     },
     "unseen": {
-     "trades": 2452,
-     "days": 185,
-     "win_rate": 0.723,
-     "avg_ret": 0.0486
+     "trades": 3133,
+     "days": 217,
+     "win_rate": 0.709,
+     "avg_ret": 0.0424
     },
     "blocked": false
    },
@@ -1704,29 +1712,42 @@
     "blocked": false
    }
   },
-  "rule": "A zone is blocked when A+ setups there won under 58% with an average trade under +0.4%, in the training years and on unseen data alike, on 150+ trades over 30+ days. Re-tested at every calibration."
+  "exempt": {
+   "slide": {
+    "R_FLUSH_WITH_MARKET|core": {
+     "p": 0.6683,
+     "n": 49,
+     "days": 17,
+     "day_win": 0.647,
+     "avg_ret": 0.082,
+     "train": 0.75,
+     "oos": 0.667
+    }
+   }
+  },
+  "rule": "A zone is blocked when A+ setups there won under 58% with an average trade under +0.4%, in the training years and on unseen data alike, on 150+ trades over 30+ days. A strategy still trades a blocked zone on a coin tier where its own record there clears the full A+ bar (40+ trades on 15+ days, both periods). Re-tested at every calibration."
  },
  "confluence": [
   {
    "agree": "1 strategy",
-   "trades": 2548,
-   "win_rate": 0.73,
-   "avg_ret": 0.0462,
-   "days": 180
+   "trades": 3250,
+   "win_rate": 0.716,
+   "avg_ret": 0.0416,
+   "days": 218
   },
   {
    "agree": "2 strategies",
-   "trades": 387,
-   "win_rate": 0.866,
-   "avg_ret": 0.0785,
-   "days": 60
+   "trades": 381,
+   "win_rate": 0.858,
+   "avg_ret": 0.0719,
+   "days": 56
   },
   {
    "agree": "3 or more",
-   "trades": 215,
-   "win_rate": 0.902,
-   "avg_ret": 0.1171,
-   "days": 24
+   "trades": 209,
+   "win_rate": 0.904,
+   "avg_ret": 0.1158,
+   "days": 21
   }
  ],
  "topup": {
@@ -1735,47 +1756,47 @@
   "tried": [
    {
     "floor": 0.58,
-    "trades": 150,
-    "win_rate": 0.4733,
-    "avg_ret": -0.01576,
-    "profit_factor": 0.655,
-    "day_win_rate": 0.488,
-    "weeks_at_min": 0.515,
-    "per_week": 30.47
+    "trades": 130,
+    "win_rate": 0.4769,
+    "avg_ret": -0.01314,
+    "profit_factor": 0.699,
+    "day_win_rate": 0.5,
+    "weeks_at_min": 0.535,
+    "per_week": 36.78
    },
    {
     "floor": 0.6,
-    "trades": 150,
-    "win_rate": 0.4733,
-    "avg_ret": -0.01576,
-    "profit_factor": 0.655,
-    "day_win_rate": 0.488,
-    "weeks_at_min": 0.515,
-    "per_week": 30.47
+    "trades": 130,
+    "win_rate": 0.4769,
+    "avg_ret": -0.01314,
+    "profit_factor": 0.699,
+    "day_win_rate": 0.5,
+    "weeks_at_min": 0.535,
+    "per_week": 36.78
    },
    {
     "floor": 0.62,
-    "trades": 150,
-    "win_rate": 0.4733,
-    "avg_ret": -0.01576,
-    "profit_factor": 0.655,
-    "day_win_rate": 0.488,
-    "weeks_at_min": 0.515,
-    "per_week": 30.47
+    "trades": 130,
+    "win_rate": 0.4769,
+    "avg_ret": -0.01314,
+    "profit_factor": 0.699,
+    "day_win_rate": 0.5,
+    "weeks_at_min": 0.535,
+    "per_week": 36.78
    },
    {
     "floor": 0.64,
-    "trades": 44,
-    "win_rate": 0.5227,
-    "avg_ret": -0.00322,
-    "profit_factor": 0.926,
-    "day_win_rate": 0.5676,
-    "weeks_at_min": 0.431,
-    "per_week": 29.6
+    "trades": 40,
+    "win_rate": 0.5,
+    "avg_ret": -0.00552,
+    "profit_factor": 0.873,
+    "day_win_rate": 0.5455,
+    "weeks_at_min": 0.465,
+    "per_week": 36.05
    }
   ],
   "note": "Top-ups are off: no grade-A rule won 62%+ with a +0.4% average trade on unseen data. The weekly pace is served by A+ setups only."
  },
- "calibrated_at": "2026-11-17T02:17:56Z",
+ "calibrated_at": "2026-11-17T04:41:36Z",
  "data_through": "2026-11-16"
 }

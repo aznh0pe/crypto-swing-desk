@@ -238,9 +238,25 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
         if row["blocked"]:
             blocked.append(name)
         table[name] = row
-    g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked), "grade"] = "A"
-    return g, {"blocked": blocked, "table": table,
-               "rule": f"A zone is blocked when A+ setups there won under {100 * R['win']:.0f}% with an average trade under +{100 * R['avg']:.1f}%, in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. Re-tested at every calibration."}
+    # A blocked zone is closed to the book as a whole, not to a strategy that has earned its place there: coins and
+    # strategies behave differently in the same market, so each strategy x coin tier is judged on its own zone record.
+    G, exempt = P["grading"], {}
+    apz = bt.done(g[(g["grade"] == "A+") & g["zone"].isin(blocked)])
+    base = float((apz["ret"] > 0).mean()) if len(apz) else 0.5
+    for (zone, sid, tier), x in apz.groupby(["zone", "strategy", "tier"]):
+        tr_, un_ = x[x["signal_date"] < cut], x[x["signal_date"] >= cut]
+        n, days = len(x), x["signal_date"].nunique()
+        p = (float((x["ret"] > 0).sum()) + 20 * base) / (n + 20)
+        dwin = float((x.groupby("signal_date")["ret"].mean() > 0).mean())
+        ok = (n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
+              and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
+        if ok:
+            exempt.setdefault(zone, {})[f"{sid}|{tier}"] = {"p": round(p, 4), "n": int(n), "days": int(days), "day_win": round(dwin, 3), "avg_ret": round(float(x["ret"].mean()), 4),
+                                                            "train": round(float((tr_["ret"] > 0).mean()), 3), "oos": round(float((un_["ret"] > 0).mean()), 3)}
+    keep = pd.Series([f"{s}|{t}" in (exempt.get(z) or {}) for z, s, t in zip(g["zone"], g["strategy"], g["tier"])], index=g.index)
+    g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked) & ~keep, "grade"] = "A"
+    return g, {"blocked": blocked, "table": table, "exempt": exempt,
+               "rule": f"A zone is blocked when A+ setups there won under {100 * R['win']:.0f}% with an average trade under +{100 * R['avg']:.1f}%, in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. A strategy still trades a blocked zone on a coin tier where its own record there clears the full A+ bar (40+ trades on 15+ days, both periods). Re-tested at every calibration."}
 
 
 def one_per_coin(t: pd.DataFrame) -> pd.DataFrame:
@@ -528,8 +544,12 @@ def main():
         sp = shipped
     retired = {**(shipped.get("retired") or {}), **(sp.get("retired") or {})}
     custom = {**(shipped.get("custom") or {}), **(sp.get("custom") or {})}   # promoted strategies are never lost...
+    rev_of = lambda c: int(((c or {}).get("spec") or c or {}).get("rev", 0) or 0)
+    for k, c in (shipped.get("custom") or {}).items():                     # ...and a rule revised in the engine replaces its older stored version
+        if rev_of(c) > rev_of(custom.get(k)):
+            custom[k] = c
     sp = {**sp, "custom": {k: v for k, v in custom.items() if k not in retired}, "retired": retired}   # ...and retired ones never return
-    extra = [e for e in extra if e["id"] not in retired]
+    extra = [e for e in extra if e["id"] not in retired and e["id"] not in sp["custom"]]   # a live strategy's rule lives in custom, not in its old research record
     if a.state:   # backtests use the fees the account really pays (Funds, Desk settings)
         s_ = st.get("settings") or {}
         if s_.get("maker_fee_pct") is not None and s_.get("taker_fee_pct") is not None:

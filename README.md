@@ -83,3 +83,11 @@ A scan raised a red "Problem in the last scan" banner because a routine news che
 - A code release no longer makes the next check run look for setups again: the catch-up stamp (`scan.book_id`) follows strategy settings, grades and the coin-list floor only, and a catch-up never re-announces a setup that was already served.
 - Tests 7b to 7d in `tests/test_regressions.py` hold all of this in place.
 
+## Danger zones and zone-specific strategies (2026-11-17)
+
+- The nightly review found that the A+ book loses while Bitcoin is 10 to 35% under its 200-day average (46% wins in training, 58% on unseen data, negative average). `calibrate.apply_zones` now tracks A+ results in four zones of that distance and blocks a zone that loses in both periods.
+- A blocked zone stays open to any strategy x coin tier whose own record there clears the full A+ bar (40+ trades, 15+ days, both periods). On 2026-11-17 that was one cell: Deep Flush with the Market on core coins (67%). Tickets in a blocked zone show the zone's odds, not the general ones.
+- Screened that day for the 10-35% zone, all failing: 12 strategy families (strong-coin pullbacks, breakouts, runners, EMA touches, accumulation days, bounce days), 160 entry/exit/coin-state combinations, 48 looser versions of the flush rule, and a coin's own past record as a predictor (it predicts nothing). Wider-list coins are the worst there (30 to 46%).
+- A strategy written for a zone earns its place automatically at the next calibration; the research focus tells the nightly run which zones are blocked and what is open there.
+- A live strategy's rule can be revised in the engine: a shipped spec with a higher `rev` replaces the stored one, and the training grid decides whether the change is used (first use: the overheated-market cap on Dip in a Surging Bull, 69% to 77% in calm bull markets).
+

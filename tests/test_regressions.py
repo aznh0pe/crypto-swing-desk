@@ -158,6 +158,11 @@ def main():
     blocked_found, notes = SC.find_entries(indz, Pz, {}, I.condition_series(indz["market"]).iloc[-1] if hasattr(I, "condition_series") else "bull_calm", {})
     assert not [e for e in blocked_found if e["grade"] == "A+"] and len(blocked_found) == len(open_found)
     assert any("Danger zone" in n for n in notes)
+    # 12b. ...except for a strategy x coin tier with its own A+ record in that zone, shown with the zone's odds
+    Pz["zones"]["exempt"] = {zone: {f"{k}|{t}": {"p": 0.67, "n": 49, "days": 17, "train": 0.75, "oos": 0.67} for k in Pz["strategies"] for t in ("core", "wide")}}
+    ex_found, _ = SC.find_entries(indz, Pz, {}, I.condition_series(indz["market"]).iloc[-1] if hasattr(I, "condition_series") else "bull_calm", {})
+    assert len([e for e in ex_found if e["grade"] == "A+"]) == len([e for e in open_found if e["grade"] == "A+"])
+    assert all(e["win_pct"] == 67.0 and e["zone_cell"] for e in ex_found if e["grade"] == "A+")
     print("regression tests passed")
 
 

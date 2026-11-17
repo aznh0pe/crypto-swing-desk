@@ -60,6 +60,12 @@ def cmd_next(state_dir, out_dir) -> dict:
     if pace:
         focus += (f" Weekly pace: {pace.get('this_week', 0)} A+ setups sent this week against a pace of {pace.get('pace')} by today (minimum {pace.get('min_week')} a week); "
                   f"{pace.get('short_weeks', 0)} of the last {pace.get('weeks', 4)} weeks fell short." + (" The desk needs more genuine A+ setups in quiet weeks: prefer triggers that fire on days when the live book is silent." if pace.get("short_weeks") else ""))
+    zs = P.get("zones") or {}
+    if zs.get("blocked"):
+        focus += (" Danger zones (where the A+ book as a whole loses, so only strategies with their own A+ record there are sent): "
+                  + "; ".join(f"{I.ZONE_LABEL[z]} (open there: {', '.join(sorted((zs.get('exempt') or {}).get(z) or {})) or 'nothing yet'})" for z in zs["blocked"])
+                  + ". A strategy written for such a zone (put the zone in its conditions with btc_dist200) earns its place automatically at the next calibration if it clears the A+ bar there on 40+ trades over 15+ days in both periods; "
+                    "on 2026-11-17 some 170 entry, exit and coin-state combinations were screened for the 10-35% zone and none won 60% in both periods except deep market-wide flushes on core coins, so look for a different kind of trigger, and test core and wider-list coins apart. ")
     focus += (" What is already known (see lessons): dip-buying only clears the bar in stressed markets or when Bitcoin is surging; plain dips, range lows, deep resting bids, streaks and rebound-confirmation entries all failed in calm bull and quiet bear markets at 0.5%/0.9% fees. "
               "New quiet-market ideas should use a different trigger family or a much larger edge per trade; lower fees also move calm-bull dips over the bar.")
     res = {"next_seed": seed["id"] if seed else None, "spec_file": str((out / "seed_spec.json").resolve()) if seed else None,

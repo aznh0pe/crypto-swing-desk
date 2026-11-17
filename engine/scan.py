@@ -131,6 +131,9 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
     specs, table, table_w, costs, G = S.all_specs(P), P.get("grade_table") or {}, P.get("grade_table_wide") or {}, P["costs"], P["grading"]
     maker, taker = costs["maker_pct"] / 100, costs["taker_pct"] / 100
     best, notes, agree = {}, [], {}
+    zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
+    zs = P.get("zones") or {}
+    blocked_zones = set(zs.get("blocked") or [])
     for sid, plan in S.all_plans(ind, P).items():
         if sid in paused:
             notes.append(f"{specs[sid]['label']} is paused by the daily review: {paused[sid]}")
@@ -163,6 +166,13 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
             p, grade = cell.get("p"), cell.get("grade", "B")
             if p is None:
                 continue
+            zone_blocked = zone_cell = False
+            if zone in blocked_zones and grade == "A+":        # danger zone: only a strategy x tier with its own A+ record there trades it
+                zc = ((zs.get("exempt") or {}).get(zone) or {}).get(f"{sid}|{tier}")
+                if zc:
+                    cell, p, zone_cell = {**cell, **zc}, zc["p"], True
+                else:
+                    grade, zone_blocked = "A", True
             fee_in = taker if market else maker
             net_win = (tg * (1 - maker)) / (entry * (1 + fee_in)) - 1
             net_loss = (stop * (1 - taker)) / (entry * (1 + fee_in)) - 1
@@ -172,7 +182,7 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
             sp = specs[sid]
             e = {"ticker": tk, "product": u.get("product") or f"{tk}-USD", "strategy": sid, "strategy_label": sp["label"], "family": sp.get("family"),
                  "about": sp.get("about"), "grade": grade, "score": score, "win_pct": round(100 * p, 1), "cell_n": cell.get("n"), "cell_days": cell.get("days"),
-                 "tier": tier, "min_size": u.get("min_size"),
+                 "tier": tier, "min_size": u.get("min_size"), "zone": zone, "zone_blocked": zone_blocked, "zone_cell": zone_cell,
                  "cell_train": cell.get("train"), "cell_oos": cell.get("oos"), "condition": cond, "entry_kind": plan["entry_kind"],
                  "entry": entry, "stop": stop, "target": tg, "atr": round(atr, 10), "last_close": last,
                  "stop_pct": round(100 * (stop / entry - 1), 2), "target_pct": round(100 * (tg / entry - 1), 2),
@@ -193,17 +203,14 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
         e["also_by"] = [x for x in agree.get(tk, []) if x != e["strategy_label"]]
         if e["grade"] == "A+" and k > 1:
             e["score"] = round(e["score"] + CONFLUENCE_BONUS * (min(k, 3) - 1), 1)
-    zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
-    zs = P.get("zones") or {}
-    if zone in (zs.get("blocked") or []):          # danger zone: the A+ book loses here, so nothing is sent as A+
-        held = [e["ticker"] for e in best.values() if e["grade"] == "A+"]
-        for e in best.values():
-            if e["grade"] == "A+":
-                e["grade"], e["zone_blocked"] = "A", True
+    if zone in blocked_zones:
+        held = sorted(e["ticker"] for e in best.values() if e.get("zone_blocked"))
         row = (zs.get("table") or {}).get(zone) or {}
+        ex = sorted((zs.get("exempt") or {}).get(zone) or {})
+        names = [f"{specs[k.split('|')[0]]['label']} on {'core' if k.endswith('|core') else 'wider-list'} coins" for k in ex if k.split("|")[0] in specs]
         notes.append(f"Danger zone: {I.ZONE_LABEL[zone]}. A+ setups in this zone won {100 * row['train']['win_rate']:.0f}% in the training years and {100 * row['unseen']['win_rate']:.0f}% on unseen data "
-                     f"({row['all']['trades']} trades, {row['all']['days']} days), so none are sent until Bitcoin leaves it"
-                     + (f". Moved to the watchlist: {', '.join(held)}." if held else "."))
+                     f"({row['all']['trades']} trades, {row['all']['days']} days), so only strategies with their own A+ record in this zone are sent"
+                     + (f": {'; '.join(names)}" if names else " (none has one yet)") + (f". Moved to the watchlist: {', '.join(held)}." if held else "."))
     out = sorted(best.values(), key=lambda e: (e["grade"] != "A+", -e["score"]))
     return out, notes
 
@@ -222,11 +229,17 @@ def radar(ind, P, uni, cond, paused: dict, limit: int = 14) -> dict:
     short of a signal, or the single market-wide condition it is waiting for."""
     specs, table, table_w, b = S.all_specs(P), P.get("grade_table") or {}, P.get("grade_table_wide") or {}, I.base_masks(ind)
     coins, waiting = [], []
+    zs = P.get("zones") or {}
+    zone, blocked = I.zone_of(ind["market"]["btc_dist200"].iloc[-1]), set(zs.get("blocked") or [])
     for sid, spec in specs.items():
         rec = (P.get("strategies") or {}).get(sid) or {}
         if not rec.get("enabled") or sid in paused or (rec.get("market_conditions") and cond not in rec["market_conditions"]):
             continue
         gc, gw = ((table.get(sid) or {}).get(cond) or {}), ((table_w.get(sid) or {}).get(cond) or {})
+        if zone in blocked:        # in a danger zone the radar shows only what could actually be served there
+            ez = (zs.get("exempt") or {}).get(zone) or {}
+            gc = {**gc, **ez[f"{sid}|core"]} if f"{sid}|core" in ez else {}
+            gw = {**gw, **ez[f"{sid}|wide"]} if f"{sid}|wide" in ez else {}
         if "A+" not in (gc.get("grade"), gw.get("grade")):
             continue
         try:
@@ -235,6 +248,9 @@ def radar(ind, P, uni, cond, paused: dict, limit: int = 14) -> dict:
             continue
         if nm["market"]:
             ready = [tk for tk in nm["ready"] if not uni or ((uni.get(tk) or {}).get("status") == "online" and not (uni.get(tk) or {}).get("peg"))]
+            ready = [tk for tk in ready if (gc if bool(ind["is_core"][tk].iloc[-1]) else gw).get("grade") == "A+"]
+            if not ready and zone in blocked:
+                continue
             waiting.append({"strategy": sid, "strategy_label": spec["label"], "needs": "; ".join(m["needs"] for m in nm["market"]), "now": "; ".join(m["now"] for m in nm["market"] if m["now"]),
                             "conditions_missing": len(nm["market"]), "coins_ready": len(ready), "examples": ready[:8]})
             continue
@@ -354,7 +370,8 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     if mkt["zone_blocked"]:
         zr = ((P.get("zones") or {}).get("table") or {}).get(mkt["zone"]) or {}
         mkt["zone_note"] = (f"Danger zone: {mkt['zone_label']}. A+ setups here won {100 * zr['train']['win_rate']:.0f}% in training and {100 * zr['unseen']['win_rate']:.0f}% on unseen data, "
-                            "so no A+ alerts are sent until Bitcoin climbs back within 10% of its 200-day average or falls more than 35% under it.") if zr else "Danger zone."
+                            "so alerts are sent only for strategies with their own A+ record in this zone"
+                            + (": " + ", ".join(sorted(((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) or {})) .replace("|core", " (core coins)").replace("|wide", " (wider list)") + "." if ((P.get("zones") or {}).get("exempt") or {}).get(mkt["zone"]) else " (none yet).")) if zr else "Danger zone."
     writes, notes, errors = [], list(health["notes"]), []
     scan_id = now.strftime("%Y%m%d-%H%M") + f"-{mode}"
 
@@ -452,7 +469,7 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                 if e["ticker"] in live_tickers or e in aplus or e in topups:
                     continue
                 if e["grade"] == "A":
-                    watch.append({k: e.get(k) for k in ("ticker", "strategy_label", "score", "win_pct", "entry", "stop", "target", "rr", "hold_max_days", "cell_n", "tier")})
+                    watch.append({k: e.get(k) for k in ("ticker", "strategy_label", "score", "win_pct", "entry", "stop", "target", "rr", "hold_max_days", "cell_n", "tier", "zone_blocked")})
             for e in aplus + topups:
                 rank += 1
                 is_top = e in topups
@@ -475,6 +492,9 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                        + (f" ({100 * e['cell_train']:.0f}% in the training years, {100 * e['cell_oos']:.0f}% on unseen data)." if e.get("cell_train") is not None and e.get("cell_oos") is not None else ".") + tier_txt,
                        f"Coin: RSI(2) {e['rsi2']}, {e['vs_50d_pct']:+.1f}% vs its 50-day average, 90-day strength rank {e['rs_pct']}/100, daily range about {e['atr_pct']}%.",
                        f"After fees: +{e['net_win_pct']:.1f}% at the target, {e['net_loss_pct']:.1f}% at the stop (reward to risk {e['rr']:.2f})."]
+                if e.get("zone_cell"):
+                    why.insert(1, f"Danger zone ({I.ZONE_LABEL[e['zone']]}): most A+ setups lose here, but this strategy on {'core' if e['tier'] == 'core' else 'wider-list'} coins has its own record in the zone: "
+                                  f"{e['win_pct']:.0f}% of {e['cell_n']} trades on {e.get('cell_days')} days. The win odds shown are for this zone.")
                 if e.get("confluence", 1) > 1:
                     cf = {r["agree"]: r for r in (P.get("confluence") or [])}
                     one, many = cf.get("1 strategy"), cf.get("2 strategies" if e["confluence"] == 2 else "3 or more")
@@ -534,7 +554,7 @@ def headline(scan, entries) -> str:
         bits.append(f"{c['fills_likely']} order{'s' if c['fills_likely'] != 1 else ''} likely filled")
     if not [b for b in bits if not b.startswith("⚠")]:
         if scan["mode"] == "close":
-            bits.append(("Danger zone: no A+ alerts" if scan["market"].get("zone_blocked") else f"No new A+ setups from {scan['universe']['scanned']} coins") + (f", {c['radar']} close" if c.get("radar") and not scan["market"].get("zone_blocked") else ""))
+            bits.append(("Danger zone: no new A+ setups" if scan["market"].get("zone_blocked") else f"No new A+ setups from {scan['universe']['scanned']} coins") + (f", {c['radar']} close" if c.get("radar") and not scan["market"].get("zone_blocked") else ""))
         else:
             bits.append("No action needed")
     return " · ".join(b for b in bits if b) + f" · market {m['label']}"
