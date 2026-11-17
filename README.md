@@ -74,3 +74,12 @@ New ideas are plain JSON rule specs; `engine/rules.py` documents the format.
 - **Tested and rejected** (kept in the research log so nobody repeats them): top-ups from grade-A setups (won 43 to 45%), flushes of a coin falling alone, resting deep bids, range lows, streak and rebound-confirmation entries in quiet markets.
 
 A push that touches `pipeline/` restarts the feed loop with the new code within about ten minutes.
+
+## Alarms are for real problems only (2026-11-17)
+
+A scan raised a red "Problem in the last scan" banner because a routine news check needed a second web search. The run was fine. Since then:
+- Scheduled runs keep two lists. ISSUES = something ended up wrong, late, missing or unsaved, or needs repair: red banner, "run problem" in the headline, phone alert. NOTES = how the run went when the result is unaffected (a retry that worked, extra searches): filed at the foot of the digest via `engine.scan news --note`, never an alarm.
+- The news check allows up to three searches and three page reads per coin as normal procedure, and has an `unclear` verdict for when it still cannot tell.
+- A code release no longer makes the next check run look for setups again: the catch-up stamp (`scan.book_id`) follows strategy settings, grades and the coin-list floor only, and a catch-up never re-announces a setup that was already served.
+- Tests 7b to 7d in `tests/test_regressions.py` hold all of this in place.
+

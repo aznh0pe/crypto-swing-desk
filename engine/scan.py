@@ -12,6 +12,7 @@ Writes into O: scan.json, digest.md, headline.txt, docs/<collection>/<id>.json a
 from __future__ import annotations
 
 import argparse
+import hashlib
 import datetime as dt
 import json
 import math
@@ -193,6 +194,15 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
             e["score"] = round(e["score"] + CONFLUENCE_BONUS * (min(k, 3) - 1), 1)
     out = sorted(best.values(), key=lambda e: (e["grade"] != "A+", -e["score"]))
     return out, notes
+
+
+def book_id(P: dict) -> str:
+    """A stamp of everything that decides which setups are served: strategy settings, grades and the coin-list floor.
+    A code release that changes none of these must not trigger a second look for setups."""
+    grades = lambda t: {s: {c: v.get("grade") for c, v in (cells or {}).items()} for s, cells in (t or {}).items()}
+    body = {"strategies": P.get("strategies"), "core": grades(P.get("grade_table")), "wide": grades(P.get("grade_table_wide")),
+            "floor": (P.get("universe") or {}).get("min_dv"), "retired": sorted(P.get("retired") or {})}
+    return hashlib.sha1(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
 def radar(ind, P, uni, cond, paused: dict, limit: int = 14) -> dict:
@@ -381,9 +391,10 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     served = {a.get("id") for a in state["alerts"].values() if a.get("type") == "entry" and a.get("grade") == "A+" and not a.get("topup")
               and (_naive(a.get("valid_from")) or pd.Timestamp(0)) >= wk0 and (_naive(a.get("valid_from")) or pd.Timestamp(0)) < wk0 + pd.Timedelta(days=7)}
     # a check run does the daily-close work too if the close scan for this bar never happened (missed run, late feed)
-    book = f"{version.info().get('fingerprint')}|{P.get('rev')}|{P.get('calibrated_at')}"       # engine code + strategy book in force
-    closed_for_bar = any(sc.get("mode") == "close" and sc.get("signal_date") == str(day_bar.date()) and not sc.get("skipped_setups") and sc.get("book") == book
-                         for sc in state["scans"].values())
+    book = book_id(P)
+    legacy = f"|{P.get('rev')}|{P.get('calibrated_at')}"          # stamp of scans made before 2026-11-17 (code fingerprint|rev|calibrated)
+    closed_for_bar = any(sc.get("mode") == "close" and sc.get("signal_date") == str(day_bar.date()) and not sc.get("skipped_setups")
+                         and (sc.get("book") == book or str(sc.get("book") or "").endswith(legacy)) for sc in state["scans"].values())
     catch_up = mode == "check" and fresh and not closed_for_bar
     skipped_setups = False
     if catch_up:
@@ -436,6 +447,9 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                     slots -= 1
                 vu = vf + pd.Timedelta(days=e["valid_days"])
                 aid = f"{vf.strftime('%Y%m%d')}-{e['ticker']}-{e['strategy']}"
+                if catch_up and aid in state["alerts"]:
+                    rank -= 1
+                    continue                      # already served by an earlier scan: its ticket and order check carry on as they are
                 order = (f"Buy {sz['qty']:g} {e['ticker']} at market now (about ${sz['total_cost']:,.2f})" if e["entry_kind"] == "open_next" else
                          f"Buy limit {sz['qty']:g} {e['ticker']} at {e['entry']:.6g} (about ${sz['total_cost']:,.2f}), post-only if offered; cancel if unfilled by {iso(vu)[:16].replace('T', ' ')} UTC")
                 tier_txt = "" if e["tier"] == "core" else " This coin is on the wider list (thinner trading): the record shown is for wider-list coins, tested with harsher fills. Use a limit order only and expect a wider spread."
@@ -559,8 +573,14 @@ def digest(scan, entries, exit_alerts) -> str:
     return "\n".join(L)
 
 
-def apply_news(out_dir, verdicts: list[str], issues: list[str]):
-    """Fold the news check (and any run problems) into the scan's documents, digest and headline."""
+NEWS_VERDICTS = ("clean", "caution", "avoid", "unclear")
+
+
+def apply_news(out_dir, verdicts: list[str], issues: list[str], notes: list[str] | None = None):
+    """Fold the news check into the scan's documents, digest and headline.
+
+    issues = real run problems (something is wrong, late, missing or unsaved): red banner, headline flag, top of digest.
+    notes  = how the run went (an extra search, a retry that worked): kept at the foot of the digest, never an alarm."""
     out = pathlib.Path(out_dir)
     js = json.loads((out / "scan.json").read_text())
     scan, entries, exits = js["scan"], js["entries"], js.get("exit_alerts", [])
@@ -568,7 +588,10 @@ def apply_news(out_dir, verdicts: list[str], issues: list[str]):
     for s in verdicts:
         tk, _, rest = s.partition("=")
         verdict, _, reason = rest.partition(":")
-        v[tk.strip().upper()] = {"verdict": verdict.strip().lower(), "reason": reason.strip(), "checked_at": iso(pd.Timestamp.now(tz="UTC"))}
+        verdict = verdict.strip().lower()
+        if verdict not in NEWS_VERDICTS:
+            verdict, reason = "unclear", (rest.strip() or "no verdict given")
+        v[tk.strip().upper()] = {"verdict": verdict, "reason": reason.strip(), "checked_at": iso(pd.Timestamp.now(tz="UTC"))}
     for e in entries:
         n = v.get(e["ticker"])
         if not n:
@@ -582,14 +605,18 @@ def apply_news(out_dir, verdicts: list[str], issues: list[str]):
     for i, e in enumerate(live):
         e["rank"] = i + 1
     scan["counts"]["aplus"] = len([e for e in entries if not e.get("topup") and not e.get("withdrawn")])
-    scan["news_checked"] = sorted(v)
+    scan["news_checked"] = sorted(set(scan.get("news_checked") or []) | set(v))
     if issues:
-        scan["run_issues"] = list(scan.get("run_issues", [])) + issues
+        scan["run_issues"] = list(scan.get("run_issues", [])) + [i for i in issues if i not in scan.get("run_issues", [])]
+    if notes:
+        scan["run_notes"] = list(scan.get("run_notes", [])) + [n for n in notes if n not in scan.get("run_notes", [])]
     scan["headline"] = ("⚠ run problem · " if scan.get("run_issues") else "") + headline(scan, [e for e in entries if not e.get("withdrawn")])
     scan["digest"] = ("\n".join("⚠ RUN PROBLEM: " + i for i in scan.get("run_issues", [])) + "\n\n" if scan.get("run_issues") else "") + digest(scan, [e for e in entries if not e.get("withdrawn")], exits)
     wd = [e for e in entries if e.get("withdrawn")]
     if wd:
         scan["digest"] += "\n\nWithdrawn after the news check: " + "; ".join(f"{e['ticker']} ({e['withdrawn_reason']})" for e in wd)
+    if scan.get("run_notes"):
+        scan["digest"] += "\n\nHow this run went (nothing to act on): " + " ".join(scan["run_notes"])
     for e in entries:
         f = out / "docs" / "alerts" / f"{e['id']}.json"
         if f.exists():
@@ -609,11 +636,12 @@ def main():
     ap.add_argument("--state", default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--now", default=None)
-    ap.add_argument("--issue", action="append", default=[])
+    ap.add_argument("--issue", action="append", default=[], help="a real run problem: the result is wrong, late, missing or unsaved")
+    ap.add_argument("--note", action="append", default=[], help="how the run went (extra searches, a retry that worked): never shown as a problem")
     ap.add_argument("verdicts", nargs="*")
     a = ap.parse_args()
     if a.cmd == "news":
-        print(apply_news(a.out, a.verdicts, a.issue))
+        print(apply_news(a.out, a.verdicts, a.issue, a.note))
         return
     try:
         print(json.dumps(run(a.mode, a.data, a.state, a.out, a.now)))

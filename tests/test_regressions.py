@@ -90,6 +90,32 @@ def main():
     SC.run("check", w / "data", st, w / "scan3")
     s3 = json.loads((w / "scan3" / "scan.json").read_text())
     assert not s3["scan"]["catch_up"] and not s3["entries"]
+    # 7b. a catch-up run never re-announces a setup an earlier scan already served
+    shutil.rmtree(st / "scans")
+    (st / "alerts").mkdir()
+    for f in (w / "scan1" / "docs" / "alerts").glob("*.json"):
+        shutil.copy(f, st / "alerts" / f.name)
+    SC.run("check", w / "data", st, w / "scan3b")
+    s3b = json.loads((w / "scan3b" / "scan.json").read_text())
+    assert s3b["scan"]["catch_up"] and not s3b["entries"] and s3b["scan"]["counts"]["aplus"] == 0, len(s3b["entries"])
+    shutil.rmtree(st / "alerts")
+    # 7c. the book stamp follows what decides setups (settings, grades, floor), not the code version or the clock
+    P0 = S.load_params(None)
+    P0["grade_table"] = {"DIP_UPTREND": {"bull_calm": {"p": 0.7, "n": 60, "grade": "A+"}}}
+    b0 = SC.book_id(P0)
+    assert SC.book_id({**P0, "calibrated_at": "later", "rev": 99}) == b0
+    assert SC.book_id({**P0, "grade_table": {"DIP_UPTREND": {"bull_calm": {"p": 0.6, "n": 60, "grade": "A"}}}}) != b0
+    # 7d. run notes are not run problems: a second news search must never raise the alarm (2026-11-17, USELESS)
+    h0 = json.loads((w / "scan1" / "scan.json").read_text())["scan"]["headline"]
+    tk = json.loads((w / "scan1" / "scan.json").read_text())["entries"][0]["ticker"]
+    SC.apply_news(w / "scan1", [f"{tk}=clean", "C01=maybe:could not tell"], [], ["News check for X took a second search."])
+    j = json.loads((w / "scan1" / "scan.json").read_text())
+    assert not j["scan"].get("run_issues") and "run problem" not in j["scan"]["headline"] and "RUN PROBLEM" not in j["scan"]["digest"]
+    assert j["scan"]["headline"] == h0 and "How this run went" in j["scan"]["digest"] and j["scan"]["run_notes"]
+    assert [e for e in j["entries"] if e["ticker"] == "C01"][0]["news"]["verdict"] == "unclear"
+    SC.apply_news(w / "scan1", [], ["The results did not save."], [])
+    j = json.loads((w / "scan1" / "scan.json").read_text())
+    assert j["scan"]["run_issues"] == ["The results did not save."] and j["scan"]["headline"].startswith("⚠ run problem")
     SC.find_entries = real_find
 
     # 8. stale prices: no setups from old bars, and the scan says so (so the next run catches up)
