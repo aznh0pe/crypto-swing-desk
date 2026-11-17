@@ -911,8 +911,8 @@ function fillModal(a) {
 }
 function closeModal(t, pre = {}) {
   const st = settings(), m = latestMarks()[t.id] || {}, guess = pre.code === "TARGET_HIT" ? t.target : pre.code === "STOP_HIT" ? t.stop : m.last ?? "";
-  const why = { TARGET_HIT: "Target filled", STOP_HIT: "Stop filled", EXIT_RULE: "Exit signal", TIME_STOP: "Time stop" }[pre.code] || "Manual";
-  modal(`${t.ticker}: record the sale`, `<div class="small muted">Entry ${fp(t.entry_price)} × ${qty(t.qty)}. Enter what your exchange filled. Sell part of it by lowering the quantity.</div>
+  const why = { TARGET_HIT: "Target filled", STOP_HIT: "Stop filled", EXIT_RULE: "Exit signal", ZONE_EXIT: "Exit signal", TIME_STOP: "Time stop" }[pre.code] || "Manual";
+  modal(`${t.ticker}: record the sale`, `<div class="small muted">Entry ${fp(t.entry_price)} × ${qty(t.qty)}. Enter what your exchange filled. Sell part of it by lowering the quantity; a leftover worth under $1 is treated as a full sale, so rounding never splits the log.</div>
     <div class="form"><div class="row"><label class="f" for="cPx">Sell price ($)<input id="cPx" type="number" step="any" min="0" value="${esc(guess)}"></label>
       <label class="f" for="cQty">Quantity sold<input id="cQty" type="number" step="any" min="0" value="${esc(t.qty)}"></label></div>
       <div class="row"><label class="f" for="cFee">Fee paid ($)<input id="cFee" type="number" step="any" min="0" placeholder="auto"></label>
@@ -924,12 +924,13 @@ function closeModal(t, pre = {}) {
     const reason = $("#cWhy").value, at = new Date($("#cAt").value || Date.now()); if (isNaN(at)) throw { message: "Pick the time it sold." };
     const feeRate = (reason === "Target filled" ? st.maker_fee_pct : st.taker_fee_pct) / 100;
     const feeOut = $("#cFee").value === "" ? ex * q * feeRate : Math.max(0, Number($("#cFee").value) || 0);
-    const share = Math.min(1, q / tq), feeIn = (num(t.fee_in) || 0) * share, cost = num(t.entry_price) * q + feeIn;
+    const whole = q / tq > 0.999999 || (tq - q) * ex < 1;       // dust left over is not a second position
+    const share = whole ? 1 : Math.min(1, q / tq), feeIn = (num(t.fee_in) || 0) * share, cost = num(t.entry_price) * q + feeIn;
     const pnl = +(ex * q - feeOut - cost).toFixed(2), pnlPct = +((100 * pnl) / cost).toFixed(2);
-    const days = Math.max(1, Math.ceil((at - new Date(t.entry_at)) / 86400000)), whole = share > 0.999999;
+    const days = Math.max(1, Math.ceil((at - new Date(t.entry_at)) / 86400000));
     const closed = { status: "closed", exit_price: ex, exit_at: at.toISOString(), exit_reason: reason, fee_out: +feeOut.toFixed(2), pnl, pnl_pct: pnlPct, days_held: days,
       r_mult: num(t.stop) && num(t.entry_price) > num(t.stop) ? +((ex - num(t.entry_price)) / (num(t.entry_price) - num(t.stop))).toFixed(2) : null };
-    if (whole) await updDoc("trades/" + t.id, closed);
+    if (whole) await updDoc("trades/" + t.id, { ...closed, qty: q });
     else { const cid = uid("t"); await setDoc("trades/" + cid, { ...t, id: cid, parent_id: t.id, qty: q, fee_in: +feeIn.toFixed(2), ...closed, created_at: nowIso() });
       await updDoc("trades/" + t.id, { qty: +(tq - q).toPrecision(10), fee_in: +((num(t.fee_in) || 0) - feeIn).toFixed(2) }); }
     const lid = uid("pnl"); await setDoc("ledger/" + lid, { id: lid, type: "pnl", amount: pnl, at: at.toISOString(), date: at.toISOString().slice(0, 10), ticker: t.ticker, trade_id: t.id, note: `${t.ticker} ${reason.toLowerCase()}${whole ? "" : " (part)"}` });
