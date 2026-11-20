@@ -17,15 +17,16 @@
    "prompt": "ops/generated/learning.md",
    "notify": "push on problems only"
   },
-  "weekly": {
+  "calibration": {
    "id": "trig_01HJEqLNJWYVW7kUmx2oaHpw",
-   "cron_utc": "17 18 * * 0",
-   "pacific_winter": "Sunday 10:17 AM",
+   "cron_utc": "10 2 * * *",
+   "pacific_winter": "6:10 PM daily, after the daily review",
    "prompt": "ops/generated/weekly.md",
-   "notify": "push on problems only"
+   "notify": "push on problems only",
+   "note": "Was weekly until 2026-11-20; now daily so research promoted at 01:25 UTC is graded and can alert the same night. Fires the scan task when the book changed."
   }
  },
- "prompts_synced": "2026-11-16: all three stored task prompts match ops/generated/*.md",
+ "prompts_synced": "2026-11-20: scan and calibration prompts updated",
  "feed": {
   "workflow": "crypto-data (self-renewing 10-minute loop)",
   "watchdog": "crypto-watchdog (every 15 minutes: restarts the loop if the data branch is over 90 minutes old or no run is alive)"

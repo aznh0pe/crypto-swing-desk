@@ -135,6 +135,7 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
     specs, table, table_w, costs, G = S.all_specs(P), P.get("grade_table") or {}, P.get("grade_table_wide") or {}, P["costs"], P["grading"]
     maker, taker = costs["maker_pct"] / 100, costs["taker_pct"] / 100
     best, notes, agree = {}, [], {}
+    nest = P.get("confluence_groups") or {}
     zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
     zs = P.get("zones") or {}
     blocked_zones = set(zs.get("blocked") or [])
@@ -198,13 +199,13 @@ def find_entries(ind, P, uni, cond, paused: dict) -> tuple[list, list]:
                  "atr_pct": round(100 * float(ind["atr_pct"][tk].iloc[-1]), 1), "dollar_vol_30d": round(float(ind["dv30"][tk].iloc[-1])),
                  "is_major": bool(ind["is_major"][tk].iloc[-1])}
             if grade == "A+":
-                agree.setdefault(tk, []).append(sp["label"])
+                agree.setdefault(tk, {}).setdefault(nest.get(sid, sid), []).append(sp["label"])
             if tk not in best or (e["grade"] == "A+", e["score"]) > (best[tk]["grade"] == "A+", best[tk]["score"]):
                 best[tk] = e
     for tk, e in best.items():        # agreement between A+ strategies is the strongest ranking signal measured: it lifts the score
-        k = len(agree.get(tk, []))
+        k = len(agree.get(tk, {}))             # independent groups: strategies that take the same trades count once
         e["confluence"] = max(1, k)
-        e["also_by"] = [x for x in agree.get(tk, []) if x != e["strategy_label"]]
+        e["also_by"] = [x for v in agree.get(tk, {}).values() for x in v if x != e["strategy_label"]]
         if e["grade"] == "A+" and k > 1:
             e["score"] = round(e["score"] + CONFLUENCE_BONUS * (min(k, 3) - 1), 1)
     if zone in blocked_zones:

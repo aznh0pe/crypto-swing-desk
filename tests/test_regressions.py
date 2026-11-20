@@ -207,6 +207,19 @@ def main():
     assert wl["win"] == 10.2 and wl["after"] == 9.5, wl
     fc = SC.check_order(al, wd, None, hq, {"X": 10.5}, T("2026-03-02 13:00"))  # still inside the window: no instruction
     assert fc["window_over"] is False and "action" not in fc and fc["text"].endswith("Still working."), fc
+    # 16. strategies that take the same trades are one voice: no agreement bonus between them
+    import engine.calibrate as CB
+    tr = pd.DataFrame({"strategy": ["A"] * 10 + ["B"] * 9 + ["C"] * 5,
+                       "ticker": [f"T{i}" for i in range(10)] + [f"T{i}" for i in range(9)] + ["T0", "X1", "X2", "X3", "X4"],
+                       "signal_date": [T("2026-01-01")] * 24})
+    gr = CB.nested_groups(tr)
+    assert gr["B"] == gr["A"] and gr["C"] == "C", gr
+    gg = tr.assign(grade="A+", score=50.0)
+    cf = CB.add_confluence(gg, {k: v for k, v in gr.items() if k != v})
+    assert int(cf[(cf["ticker"] == "T0")]["confluence"].max()) == 2 and int(cf[(cf["ticker"] == "T5")]["confluence"].max()) == 1
+    # 17. a zone whose average trade loses stays blocked even if its win rate edges over 58%
+    src = pathlib.Path(CB.__file__).read_text()
+    assert 's["avg_ret"] < R["avg"] and (s["win_rate"] < R["win"] or s["avg_ret"] < 0)' in src
     # a run that updates one alert twice keeps both updates
     wr, od = [], pathlib.Path(tempfile.mkdtemp())
     SC._write(od, wr, "update", "alerts", "a1", {"win_pct": 67}); SC._write(od, wr, "update", "alerts", "a1", {"expiry": {"action": "cancel"}})

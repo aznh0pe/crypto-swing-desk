@@ -9,6 +9,7 @@ Conservative fill and exit rules:
 * If a later day touches both stop and target, the stop is assumed first. Gaps through a level fill at the open.
 * Targets are resting limit sells (maker fee). Stops, signal exits and time exits are market sells
   (taker fee plus slippage).
+* A trade still open on the last day of data is counted at that day's close (reason "mark"), never left out.
 """
 from __future__ import annotations
 
@@ -148,6 +149,10 @@ def simulate(plan: dict, ind: dict, costs: dict | None = None, last_signal_row: 
         if exit_i < 0 and 0 <= last_bar[j] < T - 4 and last_bar[j] >= fill_i:
             # the coin stopped trading (delisted) while the trade was open: out at its last price, never dropped
             exit_i, exit_p, reason = int(last_bar[j]), C[last_bar[j], j] * (1 - slip), "delisted"
+        elif exit_i < 0 and fill_i >= 0 and 0 <= last_bar[j] and last_bar[j] >= fill_i and np.isfinite(C[last_bar[j], j]):
+            # still open at the end of the data: counted at its mark, never left out. Leaving open trades out flatters
+            # the newest days, because quick winners close first and the slow losers are the ones still open.
+            exit_i, exit_p, reason = int(last_bar[j]), C[last_bar[j], j] * (1 - slip), "mark"
         net = (exit_p * (1 - fee_out)) / (fill * (1 + fee_in)) - 1 if exit_i >= 0 else np.nan
         rows.append((t, j, fill_i, fill, exit_i, exit_p, reason, held, stop, tgt, limit, net, core))
     if not rows:

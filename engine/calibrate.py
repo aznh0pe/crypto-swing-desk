@@ -191,12 +191,32 @@ def apply_grades(trades: pd.DataFrame, table: dict, table_wide: dict | None = No
 CONFLUENCE_BONUS = 10.0     # score points per extra A+ strategy that flags the same coin on the same day (capped at two extra)
 
 
-def add_confluence(g: pd.DataFrame) -> pd.DataFrame:
-    """How many A+ strategies flag the same coin on the same day. Agreement is the strongest ranking signal the
-    desk has measured, so it lifts the score (which decides what the account funds first)."""
+def nested_groups(trades: pd.DataFrame, share: float = 0.9) -> dict:
+    """Strategies whose signals are (almost) the same trades count as one voice. When 90%+ of one strategy's
+    (coin, day) signals are also another's, their agreement is mechanical, not independent confirmation, so they
+    share a group and never earn the agreement bonus from each other. Returns {strategy: group name}."""
+    if not len(trades):
+        return {}
+    sigs = {sid: set(zip(x["ticker"], x["signal_date"])) for sid, x in trades.groupby("strategy")}
+    ids = sorted(sigs, key=lambda k: -len(sigs[k]))
+    grp = {k: k for k in ids}
+    find = lambda k: k if grp[k] == k else find(grp[k])
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            small = min(len(sigs[a]), len(sigs[b]))
+            if small and len(sigs[a] & sigs[b]) >= share * small:
+                grp[find(b)] = find(a)
+    return {k: find(k) for k in ids}
+
+
+def add_confluence(g: pd.DataFrame, groups: dict | None = None) -> pd.DataFrame:
+    """How many independent A+ strategies flag the same coin on the same day. Agreement is the strongest ranking
+    signal the desk has measured, so it lifts the score (which decides what the account funds first). Strategies in
+    one nested group (see nested_groups) count once."""
     g = g.copy()
-    ap = g[g["grade"] == "A+"]
-    k = ap.groupby(["ticker", "signal_date"])["strategy"].nunique().rename("confluence")
+    groups = groups or {}
+    ap = g[g["grade"] == "A+"].assign(_grp=lambda x: x["strategy"].map(lambda s: groups.get(s, s)))
+    k = ap.groupby(["ticker", "signal_date"])["_grp"].nunique().rename("confluence")
     g = g.join(k, on=["ticker", "signal_date"])
     g["confluence"] = g["confluence"].fillna(1).astype(int)
     g.loc[g["grade"] == "A+", "score"] = (g["score"] + CONFLUENCE_BONUS * (g["confluence"].clip(upper=3) - 1)).round(1)
@@ -233,7 +253,9 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
         for key, y in (("all", x), ("train", x[x["signal_date"] < cut]), ("unseen", x[x["signal_date"] >= cut])):
             row[key] = {"trades": int(len(y)), "days": int(y["signal_date"].nunique()), "win_rate": round(float((y["ret"] > 0).mean()), 3) if len(y) else None,
                         "avg_ret": round(float(y["ret"].mean()), 4) if len(y) else None}
-        bad = lambda s: s["trades"] and s["win_rate"] < R["win"] and s["avg_ret"] < R["avg"]
+        # bad = no real edge: the average trade is under +0.4%, and either it loses money or it wins under 58%.
+        # A win rate that edges over 58% must never reopen a zone where the average trade still loses.
+        bad = lambda s: bool(s["trades"]) and s["avg_ret"] < R["avg"] and (s["win_rate"] < R["win"] or s["avg_ret"] < 0)
         row["blocked"] = bool(row["all"]["trades"] >= R["min_n"] and row["all"]["days"] >= R["min_days"] and bad(row["all"]) and bad(row["train"]) and bad(row["unseen"]))
         if row["blocked"]:
             blocked.append(name)
@@ -256,7 +278,7 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     keep = pd.Series([f"{s}|{t}" in (exempt.get(z) or {}) for z, s, t in zip(g["zone"], g["strategy"], g["tier"])], index=g.index)
     g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked) & ~keep, "grade"] = "A"
     return g, {"blocked": blocked, "table": table, "exempt": exempt,
-               "rule": f"A zone is blocked when A+ setups there won under {100 * R['win']:.0f}% with an average trade under +{100 * R['avg']:.1f}%, in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. A strategy still trades a blocked zone on a coin tier where its own record there clears the full A+ bar (40+ trades on 15+ days, both periods). Re-tested at every calibration."}
+               "rule": f"A zone is blocked when A+ setups there make no real edge (an average trade under +{100 * R['avg']:.1f}% that either loses money or wins under {100 * R['win']:.0f}%), in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. A strategy still trades a blocked zone on a coin tier where its own record there clears the full A+ bar (40+ trades on 15+ days, both periods). Re-tested at every calibration."}
 
 
 def one_per_coin(t: pd.DataFrame) -> pd.DataFrame:
@@ -414,7 +436,8 @@ def run_backtest(data_dir, state_params: dict | None = None, extra_specs: list |
                         "and only where the strategy has already earned A or A+ on the core list. A = 58%+: watchlist only. When several A+ strategies flag the same coin on the same day, it ranks first.")}
     pace, universe = {}, {}
     if len(allt):
-        g, zones = apply_zones(add_confluence(apply_grades(allt, table, table_w)), ind, P)
+        P["confluence_groups"] = {k: v for k, v in nested_groups(allt).items() if k != v}
+        g, zones = apply_zones(add_confluence(apply_grades(allt, table, table_w), P["confluence_groups"]), ind, P)
         P["zones"] = zones
         done_g = bt.done(g)
         ap = done_g[done_g["grade"] == "A+"]
