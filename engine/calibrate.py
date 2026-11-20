@@ -245,8 +245,27 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     g = g.copy()
     d = ind["market"]["btc_dist200"].reindex(pd.to_datetime(g["signal_date"])).values
     g["zone"] = [I.zone_of(x) for x in d]
-    ap = one_per_coin(bt.done(g[g["grade"] == "A+"]))
-    cut, R, table, blocked = pd.Timestamp(P["split"]), ZONE_RULE, {}, []
+    cut, R, G = pd.Timestamp(P["split"]), ZONE_RULE, P["grading"]
+    apz_all = bt.done(g[g["grade"] == "A+"])
+    # 1. Each strategy x coin tier is judged on its own record inside each zone: one that clears the full A+ bar
+    #    there has earned its place in that zone whatever the rest of the book does.
+    exempt = {}
+    for (zone, sid, tier), x in apz_all.groupby(["zone", "strategy", "tier"]):
+        tr_, un_ = x[x["signal_date"] < cut], x[x["signal_date"] >= cut]
+        n, days = len(x), x["signal_date"].nunique()
+        base = min(0.5, float((apz_all[apz_all["zone"] == zone]["ret"] > 0).mean()))   # shrink toward a coin flip, never toward the zone's own specialists
+        p = (float((x["ret"] > 0).sum()) + 20 * base) / (n + 20)
+        dwin = float((x.groupby("signal_date")["ret"].mean() > 0).mean())
+        ok = (n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
+              and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
+        if ok:
+            exempt.setdefault(zone, {})[f"{sid}|{tier}"] = {"p": round(p, 4), "n": int(n), "days": int(days), "day_win": round(dwin, 3), "avg_ret": round(float(x["ret"].mean()), 4),
+                                                            "train": round(float((tr_["ret"] > 0).mean()), 3), "oos": round(float((un_["ret"] > 0).mean()), 3)}
+    # 2. A zone is judged on the rest of the book: strategies that earned their own place there must not lift the
+    #    zone's average and so reopen it to the strategies that lose in it.
+    isx = pd.Series([f"{s_}|{t_}" in (exempt.get(z_) or {}) for z_, s_, t_ in zip(apz_all["zone"], apz_all["strategy"], apz_all["tier"])], index=apz_all.index, dtype=bool)
+    ap = one_per_coin(apz_all[~isx])
+    table, blocked = {}, []
     for name, lo, hi, label in I.ZONES:
         x = ap[ap["zone"] == name]
         row = {"label": label}
@@ -260,21 +279,7 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
         if row["blocked"]:
             blocked.append(name)
         table[name] = row
-    # A blocked zone is closed to the book as a whole, not to a strategy that has earned its place there: coins and
-    # strategies behave differently in the same market, so each strategy x coin tier is judged on its own zone record.
-    G, exempt = P["grading"], {}
-    apz = bt.done(g[(g["grade"] == "A+") & g["zone"].isin(blocked)])
-    base = float((apz["ret"] > 0).mean()) if len(apz) else 0.5
-    for (zone, sid, tier), x in apz.groupby(["zone", "strategy", "tier"]):
-        tr_, un_ = x[x["signal_date"] < cut], x[x["signal_date"] >= cut]
-        n, days = len(x), x["signal_date"].nunique()
-        p = (float((x["ret"] > 0).sum()) + 20 * base) / (n + 20)
-        dwin = float((x.groupby("signal_date")["ret"].mean() > 0).mean())
-        ok = (n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
-              and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
-        if ok:
-            exempt.setdefault(zone, {})[f"{sid}|{tier}"] = {"p": round(p, 4), "n": int(n), "days": int(days), "day_win": round(dwin, 3), "avg_ret": round(float(x["ret"].mean()), 4),
-                                                            "train": round(float((tr_["ret"] > 0).mean()), 3), "oos": round(float((un_["ret"] > 0).mean()), 3)}
+    exempt = {z: v for z, v in exempt.items() if z in blocked}
     keep = pd.Series([f"{s}|{t}" in (exempt.get(z) or {}) for z, s, t in zip(g["zone"], g["strategy"], g["tier"])], index=g.index)
     g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked) & ~keep, "grade"] = "A"
     return g, {"blocked": blocked, "table": table, "exempt": exempt,
