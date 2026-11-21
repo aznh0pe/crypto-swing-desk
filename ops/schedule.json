@@ -4,23 +4,23 @@
  "tasks": {
   "scan": {
    "id": "trig_01XmDAuDmq7onNrgMfTCVdd3",
-   "cron_utc": "20 0,13,19 * * *",
+   "cron_utc": "20 1,3,13,19 * * *",
    "pacific_winter": "4:20 PM (daily close), 5:20 AM, 11:20 AM",
    "prompt": "ops/generated/scan.md",
    "notify": "push",
    "also": "the dashboard's Scan now button fires this task",
-   "note": "UTC so the close scan stays after the 00:00 UTC daily close all year. Book changes from the review and recalibration apply from the next close scan; issued tickets are never pulled for a book change (2026-11-21)."
+   "note": "Daily-close scan at 01:20 UTC runs after the review (00:15) and recalibration (00:40), so tonight's findings shape tonight's alerts before they go out; 03:20, 13:20, 19:20 are position and order checks. Issued tickets stand as issued."
   },
   "learning": {
    "id": "trig_01VmbbGRffU136QgLadHyxzB",
-   "cron_utc": "25 1 * * *",
+   "cron_utc": "15 0 * * *",
    "pacific_winter": "5:25 PM",
    "prompt": "ops/generated/learning.md",
    "notify": "push on problems only"
   },
   "calibration": {
    "id": "trig_01HJEqLNJWYVW7kUmx2oaHpw",
-   "cron_utc": "10 2 * * *",
+   "cron_utc": "40 0 * * *",
    "pacific_winter": "6:10 PM daily, after the daily review",
    "prompt": "ops/generated/weekly.md",
    "notify": "push on problems only",

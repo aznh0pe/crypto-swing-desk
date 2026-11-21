@@ -143,13 +143,13 @@ def pace_stats(alerts: dict, now: pd.Timestamp, min_week: int, weeks: int = 8) -
 
 
 def run_health(state: dict, meta: dict, health: dict, now: pd.Timestamp) -> dict:
-    """Did the desk's own machinery run? Scans expected at 00:20, 13:20 and 19:20 UTC; the feed should be minutes old."""
+    """Did the desk's own machinery run? Scans expected at 01:20 (daily close), 03:20, 13:20 and 19:20 UTC; the feed should be minutes old."""
     scans = sorted([s for s in state.get("scans", {}).values() if s.get("started_at")], key=lambda s: s["started_at"])
     since = now - pd.Timedelta(hours=26)
     recent = [s for s in scans if (D.naive_ts(s["started_at"]) or pd.Timestamp(0)) >= since]
     slots, missed = [], []
     for back in range(0, 2):
-        for hh in (0, 13, 19):
+        for hh in (1, 3, 13, 19):
             t = (now.normalize() - pd.Timedelta(days=back)) + pd.Timedelta(hours=hh, minutes=20)
             if since <= t <= now - pd.Timedelta(minutes=45) and scans and t >= (D.naive_ts(scans[0]["started_at"]) or t):
                 slots.append(t)                                   # nothing was due before the desk's first scan
