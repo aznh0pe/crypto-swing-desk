@@ -84,7 +84,7 @@ Final message: every ISSUES item first, one per line as "⚠ RUN PROBLEM: <sente
 
 If the engine can't run (setup 1a and 1b both unavailable or refused): stop there, send a PushNotification saying "Crypto Swing Desk daily review could not run: open the Crypto Swing Desk chat", and make the final message say so."""
 
-WEEKLY = f"""Run the Crypto Swing Desk daily recalibration for me now. Work unattended: don't ask me anything. It runs every day at 02:10 UTC, right after the daily review (01:25 UTC), so a strategy the review designed and promoted tonight is graded, gets its own danger-zone record judged, and can alert the same night instead of waiting a week.
+WEEKLY = f"""Run the Crypto Swing Desk daily recalibration for me now. Work unattended: don't ask me anything. It runs every day at 02:10 UTC, right after the daily review (01:25 UTC), so a strategy the review designed and promoted tonight is graded, gets its own danger-zone record judged, and can alert from the next daily close instead of waiting a week.
 
 {CONTEXT}
 
@@ -97,7 +97,7 @@ Steps
 6. Pauses: read the exported learning/adjust, if there is one. For each strategy in its "paused" list that the new calibration still has switched on, leave the pause (the daily review lifts it when the strategy's graded alerts recover); for each paused strategy the calibration has switched off, remove it from "paused" and write learning/adjust back (ArtifactData "set", pinned to its version).
 7. Journal: ArtifactData "set" in collection journal, doc_id "<today's UTC date>-calibration" (if that document already exists, add "-2", "-3" and so on to the id instead of replacing it), fields id, date (today's UTC date), created_at (UTC ISO), market_label "Daily recalibration", insights (a list of plain sentences: the A+ win rate before and after for the core and wider lists, what switched on or off and why, which market conditions have an A+ strategy and which have none, the weekly pace figures, and the coin-list check: how many coins are scanned and whether the floor moved), changes (the list from step 4), notes (2 to 4 sentences: what today's data and engine changed and what research should target next), issues (ISSUES, if any).
 8. If the Projects tool is available, add the same entry at the top of the project doc "claude/Crypto Swing Desk - Learning Journal.md".
-9. Don't start any other task: the scan task runs at 03:20 UTC every night, after this calibration, and its catch-up mode re-checks the latest close's setups and live tickets on whatever book you wrote.
+9. Don't start any other task. What you write takes effect at the next daily-close scan (00:20 UTC): tickets already issued for the latest close stand as issued, so the book never changes under orders I may already have placed.
 Run problems: if ISSUES is not empty, load PushNotification with ToolSearch and send one notification: "Crypto Swing Desk recalibration: <the most important problem, under 150 characters>". NOTES never trigger a notification.
 Final message: every ISSUES item first as "⚠ RUN PROBLEM: <sentence>" (never a note); then at most eight lines: strategies on and off, changes, the A+ record, the account replay, the weekly pace, the coin-list check, and the research target.
 

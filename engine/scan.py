@@ -543,7 +543,10 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     book = book_id(P)
     legacy = f"|{P.get('rev')}|{P.get('calibrated_at')}"          # stamp of scans made before 2026-11-17 (code fingerprint|rev|calibrated)
     closed_for_bar = any(sc.get("mode") == "close" and sc.get("signal_date") == str(day_bar.date()) and not sc.get("skipped_setups")
-                         and (sc.get("book") == book or str(sc.get("book") or "").endswith(legacy)) for sc in state["scans"].values())
+                         for sc in state["scans"].values())
+    # catch-up is only for a close scan that never ran for this bar (a missed run, a late feed). A book change made
+    # after the close scan (review, recalibration, engine release) applies from the next close: tickets already issued
+    # for this bar are never added to or pulled mid-window.
     catch_up = mode == "check" and fresh and not closed_for_bar
     skipped_setups = False
     if catch_up:
@@ -564,8 +567,10 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                 was = float(old.get("win_pct") or 0)
                 if e["grade"] != "A+":
                     why = ("Danger zone: this strategy has no A+ record of its own in the current zone." if e.get("zone_blocked") else "It no longer grades A+ under the current strategy book.")
-                    upd = {"withdrawn": True, "withdrawn_reason": f"Downgraded from A+ on {iso(now)[:10]}: {why} Cancel the order if it has not filled.",
-                           "win_pct": e["win_pct"], "regraded_at": iso(now)}
+                    # an issued ticket is never pulled for a book change: you may already have acted on it. It stands
+                    # as issued (same order, stop and target); the change applies from the next daily close.
+                    upd = {"book_note": f"Since this ticket was issued ({iso(now)[:10]}), the strategy book changed: {why} The ticket stands as issued; the change applies from the next close.",
+                           "regraded_at": iso(now)}
                 elif abs(e["win_pct"] - was) >= 1:
                     upd = {"win_pct": e["win_pct"], "score": e["score"], "cell_n": e.get("cell_n"), "zone_cell": bool(e.get("zone_cell")), "regraded_at": iso(now),
                            "note": (f"Re-graded on {iso(now)[:10]}: win estimate {e['win_pct']:.0f}% (was {was:.0f}%)"
@@ -574,25 +579,10 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                     continue
                 alert_updates.setdefault(aid0, {}).update(upd)
                 _write(out, writes, "update", "alerts", aid0, upd)          # stored on the ticket itself, so later scans cannot bring the old odds back
-                notes.append(f"{e['ticker']}: " + (upd.get("withdrawn_reason") or upd["note"]))
-            # a live ticket from this bar that the book in force no longer flags at all (a revised rule, a new filter)
-            # is withdrawn too: it must never stay open just because nothing re-issued it
-            specs_now = S.all_specs(P)
-            flagged = {(e["ticker"], e["strategy"]) for e in found if e["grade"] == "A+"}
-            flagged |= {(e["ticker"], sid) for e in found if e["grade"] == "A+" for sid, sp in specs_now.items() if sp["label"] in (e.get("also_by") or [])}
-            bar_tag = (day_bar + pd.Timedelta(days=1)).strftime('%Y%m%d')
-            for aid0, old in state["alerts"].items():
-                if (old.get("type") != "entry" or not str(aid0).startswith(bar_tag + "-") or old.get("status") not in ("new", "placed")
-                        or old.get("withdrawn") or old.get("grade") != "A+"
-                        or (alert_updates.get(aid0) or {}).get("withdrawn") or (alert_updates.get(aid0) or {}).get("regraded_at")):
-                    continue
-                if (old.get("ticker"), old.get("strategy")) in flagged:
-                    continue
-                upd = {"withdrawn": True, "regraded_at": iso(now),
-                       "withdrawn_reason": f"Withdrawn on {iso(now)[:10]}: the revised {old.get('strategy_label') or old.get('strategy')} rule no longer flags {old.get('ticker')} (see the journal). Cancel the order if it has not filled; if it already filled, keep the stop and target and the desk manages it as usual."}
-                alert_updates.setdefault(aid0, {}).update(upd)
-                _write(out, writes, "update", "alerts", aid0, upd)
-                notes.append(f"{old.get('ticker')}: " + upd["withdrawn_reason"])
+                notes.append(f"{e['ticker']}: " + (upd.get("withdrawn_reason") or upd.get("book_note") or upd["note"]))
+            # A ticket the revised book no longer flags is NOT withdrawn: pulling issued tickets mid-window made the user
+            # place orders that were withdrawn minutes later (2026-11-21). Only hard reasons withdraw an issued ticket:
+            # a news "avoid" verdict, or price reaching the target before the order filled.
             if catch_up or now >= day_bar + pd.Timedelta(days=1, hours=2):       # late: drop what the market already took
                 late = []
                 for e in found:
