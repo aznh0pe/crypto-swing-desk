@@ -4,11 +4,12 @@
  "tasks": {
   "scan": {
    "id": "trig_01XmDAuDmq7onNrgMfTCVdd3",
-   "cron_utc": "20 0,13,19 * * *",
+   "cron_utc": "20 0,3,13,19 * * *",
    "pacific_winter": "4:20 PM (daily close), 5:20 AM, 11:20 AM",
    "prompt": "ops/generated/scan.md",
    "notify": "push",
-   "also": "the dashboard's Scan now button fires this task"
+   "also": "the dashboard's Scan now button fires this task",
+   "note": "03:20 UTC run added 2026-11-21: it follows the nightly recalibration so a revised book reaches tickets and new setups the same night (scheduled runs cannot start other tasks). Kept in UTC so the close scan stays after the 00:00 UTC daily close in summer too."
   },
   "learning": {
    "id": "trig_01VmbbGRffU136QgLadHyxzB",
