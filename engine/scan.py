@@ -227,6 +227,17 @@ def book_id(P: dict) -> str:
     body = {"strategies": P.get("strategies"), "core": grades(P.get("grade_table")), "wide": grades(P.get("grade_table_wide")),
             "floor": (P.get("universe") or {}).get("min_dv"), "retired": sorted(P.get("retired") or {}),
             "zones": [sorted((P.get("zones") or {}).get("blocked") or []), {z: sorted(v) for z, v in ((P.get("zones") or {}).get("exempt") or {}).items()}]}
+    # the rules themselves too: a revised rule (a new filter, a new entry price) changes what is served even when the
+    # strategy's settings and grades stay the same
+    rules_now = {}
+    for sid, rec in (P.get("strategies") or {}).items():
+        if (rec or {}).get("enabled"):
+            c = ((P.get("custom") or {}).get(sid) or {})
+            sp = c.get("spec") or c
+            if sp:
+                rules_now[sid] = {k: sp.get(k) for k in ("conditions", "entry", "exit", "stop", "target", "max_hold", "universe", "rev")}
+    if rules_now:
+        body["rules"] = rules_now
     return hashlib.sha1(json.dumps(body, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
