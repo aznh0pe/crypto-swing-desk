@@ -564,6 +564,24 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
                 alert_updates.setdefault(aid0, {}).update(upd)
                 _write(out, writes, "update", "alerts", aid0, upd)          # stored on the ticket itself, so later scans cannot bring the old odds back
                 notes.append(f"{e['ticker']}: " + (upd.get("withdrawn_reason") or upd["note"]))
+            # a live ticket from this bar that the book in force no longer flags at all (a revised rule, a new filter)
+            # is withdrawn too: it must never stay open just because nothing re-issued it
+            specs_now = S.all_specs(P)
+            flagged = {(e["ticker"], e["strategy"]) for e in found if e["grade"] == "A+"}
+            flagged |= {(e["ticker"], sid) for e in found if e["grade"] == "A+" for sid, sp in specs_now.items() if sp["label"] in (e.get("also_by") or [])}
+            bar_tag = (day_bar + pd.Timedelta(days=1)).strftime('%Y%m%d')
+            for aid0, old in state["alerts"].items():
+                if (old.get("type") != "entry" or not str(aid0).startswith(bar_tag + "-") or old.get("status") not in ("new", "placed")
+                        or old.get("withdrawn") or old.get("grade") != "A+"
+                        or (alert_updates.get(aid0) or {}).get("withdrawn") or (alert_updates.get(aid0) or {}).get("regraded_at")):
+                    continue
+                if (old.get("ticker"), old.get("strategy")) in flagged:
+                    continue
+                upd = {"withdrawn": True, "regraded_at": iso(now),
+                       "withdrawn_reason": f"Withdrawn on {iso(now)[:10]}: the revised {old.get('strategy_label') or old.get('strategy')} rule no longer flags {old.get('ticker')} (see the journal). Cancel the order if it has not filled; if it already filled, keep the stop and target and the desk manages it as usual."}
+                alert_updates.setdefault(aid0, {}).update(upd)
+                _write(out, writes, "update", "alerts", aid0, upd)
+                notes.append(f"{old.get('ticker')}: " + upd["withdrawn_reason"])
             if catch_up or now >= day_bar + pd.Timedelta(days=1, hours=2):       # late: drop what the market already took
                 late = []
                 for e in found:

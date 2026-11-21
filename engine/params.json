@@ -597,6 +597,57 @@
     }
    },
    "promoted_at": "2026-11-17T02:17:56Z"
+  },
+  "R_LATE_SELLOFF_WASHED": {
+   "promoted_at": "2026-11-21T03:00:00Z",
+   "spec": {
+    "id": "R_LATE_SELLOFF_WASHED",
+    "label": "Washed-Out Coin Late in a Bear Selloff",
+    "family": "Exhaustion",
+    "rev": 2,
+    "about": "Bitcoin is 10 to 25% under its 200-day average and the market has been in a selloff on most of the last seven days. By then the forced selling is largely done: a washed-out coin that has held up better than most over the last month (upper half on 30-day return) is bought at the close and sold on the first close back above its 5-day average. The trigger is how long the selloff has lasted, not how deep the coin fell; in the first days of a selloff the same trade loses, and laggards keep falling.",
+    "conditions": [
+     "btc_dist200 <= -0.10",
+     "btc_dist200 > -0.25",
+     "rsum(stress, 7) >= {n}",
+     "rsi2 < 15",
+     "dist20 <= {d}",
+     "rs30_pct > 0.5"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close"
+    },
+    "exit": "sma5",
+    "grid": {
+     "d": [
+      0,
+      -0.1,
+      -0.185
+     ],
+     "n": [
+      5,
+      6
+     ]
+    },
+    "max_hold": 6,
+    "params": {
+     "d": -0.185,
+     "n": 6
+    },
+    "stop": {
+     "atr": 2.5
+    },
+    "target": {
+     "atr": 2.5
+    },
+    "universe": "all",
+    "valid_days": 1,
+    "source": {
+     "title": "Crypto Swing Desk own design (2026-11-19), revised 2026-11-21: 30-day relative strength filter",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    }
+   }
   }
  },
  "retired": {
