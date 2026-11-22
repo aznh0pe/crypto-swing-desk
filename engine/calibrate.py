@@ -247,6 +247,12 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     g["zone"] = [I.zone_of(x) for x in d]
     cut, R, G = pd.Timestamp(P["split"]), ZONE_RULE, P["grading"]
     apz_all = bt.done(g[g["grade"] == "A+"])
+    # Fresh trades decide nothing on their own. A trade still open (counted at its mark) or signalled in the last
+    # week can lift a zone's record on one bounce day: on 2026-11-22 one washout day's 90 one-day-old trades reopened
+    # a zone that the same engine kept blocked a day earlier. So every zone judgement is made twice, on all trades
+    # and on settled trades only, and the stricter answer wins.
+    last_sig = apz_all["signal_date"].max() if len(apz_all) else None
+    settled_mask = lambda df: ((df["reason"] != "mark") if "reason" in df else True) & ((df["signal_date"] <= last_sig - pd.Timedelta(days=7)) if last_sig is not None else True)
     # 1. Each strategy x coin tier is judged on its own record inside each zone: one that clears the full A+ bar
     #    there has earned its place in that zone whatever the rest of the book does.
     exempt = {}
@@ -256,8 +262,16 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
         base = min(0.5, float((apz_all[apz_all["zone"] == zone]["ret"] > 0).mean()))   # shrink toward a coin flip, never toward the zone's own specialists
         p = (float((x["ret"] > 0).sum()) + 20 * base) / (n + 20)
         dwin = float((x.groupby("signal_date")["ret"].mean() > 0).mean())
-        ok = (n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
-              and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
+        def passes(x):
+            tr_, un_ = x[x["signal_date"] < cut], x[x["signal_date"] >= cut]
+            n, days = len(x), x["signal_date"].nunique()
+            if not n:
+                return False
+            p = (float((x["ret"] > 0).sum()) + 20 * base) / (n + 20)
+            dwin = float((x.groupby("signal_date")["ret"].mean() > 0).mean())
+            return bool(n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
+                        and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
+        ok = passes(x) and passes(x[settled_mask(x)])      # an exemption must hold without its freshest trades too
         if ok:
             exempt.setdefault(zone, {})[f"{sid}|{tier}"] = {"p": round(p, 4), "n": int(n), "days": int(days), "day_win": round(dwin, 3), "avg_ret": round(float(x["ret"].mean()), 4),
                                                             "train": round(float((tr_["ret"] > 0).mean()), 3), "oos": round(float((un_["ret"] > 0).mean()), 3)}
@@ -266,16 +280,21 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     isx = pd.Series([f"{s_}|{t_}" in (exempt.get(z_) or {}) for z_, s_, t_ in zip(apz_all["zone"], apz_all["strategy"], apz_all["tier"])], index=apz_all.index, dtype=bool)
     ap = one_per_coin(apz_all[~isx])
     table, blocked = {}, []
+    stat = lambda y: {"trades": int(len(y)), "days": int(y["signal_date"].nunique()), "win_rate": round(float((y["ret"] > 0).mean()), 3) if len(y) else None,
+                      "avg_ret": round(float(y["ret"].mean()), 4) if len(y) else None}
+    # bad = no real edge: the average trade is under +0.4%, and either it loses money or it wins under 58%.
+    # A win rate that edges over 58% must never reopen a zone where the average trade still loses.
+    bad = lambda s: bool(s["trades"]) and s["avg_ret"] < R["avg"] and (s["win_rate"] < R["win"] or s["avg_ret"] < 0)
     for name, lo, hi, label in I.ZONES:
         x = ap[ap["zone"] == name]
         row = {"label": label}
-        for key, y in (("all", x), ("train", x[x["signal_date"] < cut]), ("unseen", x[x["signal_date"] >= cut])):
-            row[key] = {"trades": int(len(y)), "days": int(y["signal_date"].nunique()), "win_rate": round(float((y["ret"] > 0).mean()), 3) if len(y) else None,
-                        "avg_ret": round(float(y["ret"].mean()), 4) if len(y) else None}
-        # bad = no real edge: the average trade is under +0.4%, and either it loses money or it wins under 58%.
-        # A win rate that edges over 58% must never reopen a zone where the average trade still loses.
-        bad = lambda s: bool(s["trades"]) and s["avg_ret"] < R["avg"] and (s["win_rate"] < R["win"] or s["avg_ret"] < 0)
-        row["blocked"] = bool(row["all"]["trades"] >= R["min_n"] and row["all"]["days"] >= R["min_days"] and bad(row["all"]) and bad(row["train"]) and bad(row["unseen"]))
+        verdicts = []
+        for tag, xx in (("", x), ("settled_", x[settled_mask(x)])):
+            for key, y in (("all", xx), ("train", xx[xx["signal_date"] < cut]), ("unseen", xx[xx["signal_date"] >= cut])):
+                row[tag + key] = stat(y)
+            verdicts.append(row[tag + "all"]["trades"] >= R["min_n"] and row[tag + "all"]["days"] >= R["min_days"]
+                            and bad(row[tag + "all"]) and bad(row[tag + "train"]) and bad(row[tag + "unseen"]))
+        row["blocked"] = bool(any(verdicts))          # blocked if either view says no edge
         if row["blocked"]:
             blocked.append(name)
         table[name] = row

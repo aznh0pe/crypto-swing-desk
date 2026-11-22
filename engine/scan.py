@@ -428,7 +428,8 @@ def check_order(a: dict, w, part, hourly, px: dict, now: pd.Timestamp, feed_at: 
         out.update({"filled": None, "action": "check", "text": f"The order's window ended {ended} and there is no price data for it. Check the order on Coinbase: if it is still open, cancel it."})
     elif wl["win"] < lim:
         out.update({"filled": True, "action": "record_fill",
-                    "text": f"RECORD THE FILL: the low inside the order's window was {wl['win']:.6g}, below your limit {lim:.6g}{_when(wl['win_at'])}. It should have filled. Confirm on Coinbase and record it so the desk watches the position."})
+                    "text": (f"RECORD THE FILL: the low inside the order's window was {wl['win']:.6g}, below your limit {lim:.6g}{_when(wl['win_at'])}. It should have filled. Confirm on Coinbase and record it so the desk watches the position."
+                             if placed else f"Traded through: the low inside the order's window was {wl['win']:.6g}, below the limit {lim:.6g}{_when(wl['win_at'])}. If you placed this order it filled: record it so the desk watches the position. If you didn't, nothing to do.")})
     elif wl["win"] == lim:
         out.update({"filled": None, "action": "check",
                     "text": f"CHECK ON COINBASE: the low inside the order's window was exactly your limit {lim:.6g}, so it may have filled in part or not at all. Record whatever filled, then cancel what is still open."})

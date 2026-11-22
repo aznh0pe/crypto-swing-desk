@@ -220,6 +220,9 @@ def main():
     # 17. a zone whose average trade loses stays blocked even if its win rate edges over 58%
     src = pathlib.Path(CB.__file__).read_text()
     assert 's["avg_ret"] < R["avg"] and (s["win_rate"] < R["win"] or s["avg_ret"] < 0)' in src
+    # 18. zone judgements are made on settled trades too: fresh one-day marks can never reopen a zone on their own
+    src = pathlib.Path(CB.__file__).read_text()
+    assert "settled_mask" in src and "passes(x[settled_mask(x)])" in src and "any(verdicts)" in src
     # a run that updates one alert twice keeps both updates
     wr, od = [], pathlib.Path(tempfile.mkdtemp())
     SC._write(od, wr, "update", "alerts", "a1", {"win_pct": 67}); SC._write(od, wr, "update", "alerts", "a1", {"expiry": {"action": "cancel"}})
