@@ -291,12 +291,12 @@ function ticket(a) {
       <span class="lk">Stop loss</span><span class="lv">${fp(a.stop)}</span><span class="ld">${spct(a.stop_pct)}</span>
       <span class="lk">R:R</span><span class="lv" style="font-size:13px">${esc(a.rr)}</span><span class="ld">after fees</span>
     </div></div>
-    <div class="t-facts"><div><div class="k">Size</div><div class="v">${qty(a.qty)} ${esc(a.ticker)}</div></div><div><div class="k">Cost</div><div class="v">${money(a.total_cost)}</div></div><div><div class="k">Hold</div><div class="v">≤ ${esc(a.hold_max_days)} days</div></div></div>
+    <div class="t-facts"><div><div class="k">Size</div><div class="v">${qty(a.qty)} ${esc(a.ticker)}</div></div><div><div class="k">Cost</div><div class="v">${money(a.total_cost)}</div></div><div><div class="k">Of portfolio</div><div class="v">${a.pct_of_capital != null ? esc(a.pct_of_capital) + "%" : "–"}</div></div><div><div class="k">Hold</div><div class="v">≤ ${esc(a.hold_max_days)} days</div></div></div>
     <div class="count-strip" data-count="order" data-from="${esc(a.valid_from)}" data-until="${esc(a.valid_until)}"></div>
     <div class="t-notes">
       <div><b>Order:</b> ${esc(a.order)}</div>
       <div><b>After it fills:</b> ${esc(a.after_fill)}</div>
-      <div><b>Risk:</b> ${money(a.risk_usd)} if stopped, fees included (${esc(a.pct_of_capital)}% of capital in the position) · net ${spct(a.net_win_pct)} at target, ${spct(a.net_loss_pct)} at stop</div>
+      <div><b>Risk:</b> ${money(a.risk_usd)} if stopped, fees included (${esc(a.pct_of_capital)}% of the portfolio in the position) · net ${spct(a.net_win_pct)} at target, ${spct(a.net_loss_pct)} at stop</div>
       <div><b>Market:</b> ${esc(COND[a.condition] || a.condition)} · signal from the ${dPT(a.signal_date)} daily bar</div>
       ${news}
       ${Array.isArray(a.why) && a.why.length ? `<details><summary>Why it qualifies</summary><ul>${a.why.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
@@ -335,6 +335,7 @@ function positionCard(t, m) {
   const entry = num(t.entry_price), q = num(t.qty), last = num(m?.last), end = holdEnd(t);
   const pnl = last !== null ? (last - entry) * q - (num(t.fee_in) || 0) : null, pp = last !== null && entry ? (100 * (last - entry)) / entry : null;
   const day = Math.max(1, Math.ceil((Date.now() - (end - (num(t.hold_max_days) || 7) * 86400000)) / 86400000));
+  const eq = funds().equity, val = (last !== null ? last : entry) * q, share = eq > 0 && val ? (100 * val) / eq : null;
   const tone = { sell: "st-sell", good: "st-good", act: "st-act" }[m?.tone] || "";
   const status = m ? `<div class="pc-status ${tone}" role="status"><div class="k">Status · what to do now</div><div class="lbl">${esc(m.label)}</div><div class="det">${esc(m.detail || "")}</div>
       ${m.code === "RAISE_STOP" && m.new_stop ? `<div class="pc-st-act"><button class="btn primary small" type="button" data-act="cardstop" data-tid="${esc(t.id)}" data-px="${m.new_stop}">Stop moved to ${fp(m.new_stop)}</button><span class="small muted">Press after you change it on your exchange.</span></div>` : ""}
@@ -345,7 +346,7 @@ function positionCard(t, m) {
     <div class="pc-head"><div class="pc-title"><div class="tk">${esc(t.ticker)}</div><div class="st">${t.grade ? `<span class="gchip aplus">${esc(t.grade)}</span>` : ""}${esc(t.strategy_label || t.strategy || "Manual")} · entered ${dtPT(t.entry_at)}</div></div>
       <div class="pc-pnl"><div class="lbl">Open P&L</div><div class="big ${signCls(pnl)}">${pnl !== null ? smoney(pnl) : "–"}</div><div class="lbl">${pp !== null ? `<span class="${signCls(pp)}">${spct(pp)}</span> · last ${fp(last)}` : "no price yet"}</div></div></div>
     ${status}
-    <div class="pc-levels">${lvl("Entry", fp(entry), `${qty(q)} ${esc(t.ticker)}`)}${lvl("Stop loss", fp(t.stop), entry ? spct((100 * (num(t.stop) - entry)) / entry) : "")}${lvl("Target", fp(t.target), entry ? spct((100 * (num(t.target) - entry)) / entry) : "")}${lvl("Hold day", `${Math.min(day, num(t.hold_max_days) || 7)} of ${esc(t.hold_max_days || 7)}`, `cost ${money(entry * q)}`)}</div>
+    <div class="pc-levels">${lvl("Entry", fp(entry), `${qty(q)} ${esc(t.ticker)}`)}${lvl("Stop loss", fp(t.stop), entry ? spct((100 * (num(t.stop) - entry)) / entry) : "")}${lvl("Target", fp(t.target), entry ? spct((100 * (num(t.target) - entry)) / entry) : "")}${lvl("Hold day", `${Math.min(day, num(t.hold_max_days) || 7)} of ${esc(t.hold_max_days || 7)}`, `cost ${money(entry * q)}`)}${lvl("Size", share !== null ? share.toFixed(1) + "%" : "–", `of portfolio · ${money(val)}`)}</div>
     <div class="count-strip" data-count="hold" data-until="${new Date(end).toISOString()}"></div>
     <div class="pc-signals"><div class="small"><b>Exit rule:</b> ${esc(t.exit_signal || "Target, stop or the time limit.")}</div></div>
     <div class="pc-actions"><button class="btn primary small" type="button" data-act="close" data-tid="${esc(t.id)}">Record a sale</button><button class="btn ghost small" type="button" data-act="edit" data-tid="${esc(t.id)}">Edit position</button></div>

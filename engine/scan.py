@@ -525,6 +525,15 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
         alert_updates[a["id"]] = {"last": last, "to_entry_pct": None if not last else round(100 * (float(a["entry"]) / last - 1), 2), "checked_at": iso(now),
                                   **({"withdrawn": True, "withdrawn_reason": fc["withdraw"]} if fc.get("withdraw") else {})}
 
+    # every position's size as a share of the portfolio (cash plus positions at their latest price)
+    equity = float(fund.get("capital") or 0) + sum(float(p_.get("unrealized") or 0) for p_ in positions)
+    for p_ in positions:
+        v_ = float(p_.get("qty") or 0) * float(p_.get("last") or p_.get("entry") or 0)
+        p_["value"] = round(v_, 2)
+        p_["pct_of_portfolio"] = round(100 * v_ / equity, 1) if equity > 0 and v_ else None
+    fund["equity"] = round(equity, 2)
+    fund["invested_pct"] = round(sum(p_.get("pct_of_portfolio") or 0 for p_ in positions), 1)
+
     # ---- new setups (after the daily close only): every A+ setup is served, none held back
     entries, watch, near = [], [], {"coins": [], "more": 0, "waiting": []}
     day_bar = w["close"].index[-1]
@@ -710,6 +719,10 @@ def headline(scan, entries) -> str:
     return " · ".join(b for b in bits if b) + f" · market {m['label']}"
 
 
+def _size_txt(p: dict) -> str:
+    return f"Size ${p['value']:,.2f}, {p['pct_of_portfolio']}% of the portfolio. " if p.get("pct_of_portfolio") is not None else ""
+
+
 def digest(scan, entries, exit_alerts) -> str:
     m, c = scan["market"], scan["counts"]
     L = [f"CRYPTO SWING DESK | {'DAILY-CLOSE SCAN' if scan['mode'] == 'close' else 'POSITION CHECK'} | {scan['started_at'][:16].replace('T', ' ')} UTC", ""]
@@ -722,7 +735,7 @@ def digest(scan, entries, exit_alerts) -> str:
     if acts:
         L += ["", "ACTION ON OPEN POSITIONS"]
         for p in acts:
-            L.append(f"- {p['ticker']}: {p['label']}. {p['detail']}")
+            L.append(f"- {p['ticker']}: {p['label']}. {_size_txt(p)}{p['detail']}")
     fl = scan["fill_checks"]                      # every resting order, filled or not: an order still working is part of the picture
     if fl:
         todo = [f for f in fl if f["status"] == "placed" and (f.get("withdraw") or (f.get("window_over") and f.get("action") in ("cancel", "check")))]
@@ -745,7 +758,7 @@ def digest(scan, entries, exit_alerts) -> str:
                   + ("" if e["funded"] else " | no free slot or cash right now"),
                   f"    Order: {e['order']}",
                   f"    Entry {e['entry']:.6g} | Stop {e['stop']:.6g} ({e['stop_pct']:+.1f}%) | Target {e['target']:.6g} ({e['target_pct']:+.1f}%) | reward:risk {e['rr']:.2f} after fees",
-                  f"    Size {e['qty']:g} {e['ticker']} = ${e['total_cost']:,.2f} ({e['pct_of_capital']}% of capital), risk ${e['risk_usd']:,.2f}",
+                  f"    Size {e['qty']:g} {e['ticker']} = ${e['total_cost']:,.2f} ({e['pct_of_capital']}% of the portfolio), risk ${e['risk_usd']:,.2f}",
                   f"    Hold up to {e['hold_max_days']} days. Order good from {e['valid_from'][:16].replace('T', ' ')} to {e['valid_until'][:16].replace('T', ' ')} UTC.",
                   f"    {e['after_fill']}"]
             if (e.get("news") or {}).get("verdict") not in (None, "unchecked", "clean"):
@@ -759,10 +772,13 @@ def digest(scan, entries, exit_alerts) -> str:
         if scan["watchlist"]:
             L.append("Watchlist (grade A, not sent as alerts): " + ", ".join(f"{x['ticker']} ({x['win_pct']:.0f}%)" for x in scan["watchlist"]))
     hold = [p for p in scan["positions"] if p["code"] == "HOLD"]
+    if scan["positions"] and (scan.get("funds") or {}).get("equity"):
+        fu = scan["funds"]
+        L += ["", f"PORTFOLIO: ${fu['equity']:,.2f}; {fu.get('invested_pct', 0)}% in {len(scan['positions'])} position{'s' if len(scan['positions']) != 1 else ''}, {round(100 - (fu.get('invested_pct') or 0), 1)}% cash."]
     if hold:
         L += ["", "HOLDING"]
         for p in hold:
-            L.append(f"- {p['ticker']}: {p.get('pct', 0):+.1f}% (${p.get('unrealized', 0):+,.2f}). {p['detail']}")
+            L.append(f"- {p['ticker']}: {p.get('pct', 0):+.1f}% (${p.get('unrealized', 0):+,.2f}). {_size_txt(p)}{p['detail']}")
     L += ["", "Model signals from backtested rules, not financial advice. Win odds are estimates and can be wrong. You place every order yourself."]
     return "\n".join(L)
 
