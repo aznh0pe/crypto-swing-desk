@@ -156,6 +156,51 @@ def condition_series(mk: pd.DataFrame) -> pd.Series:
     return s.where(bull.notna())
 
 
+def regime_now(ind: dict) -> dict:
+    """The market regime on the newest finished daily bar: condition (bull/bear x calm/stressed), the Bitcoin zone,
+    how long the stretch has lasted and the recent mix. Recomputed from prices at every scan, review and research
+    run, so nothing downstream ever works from a stale regime."""
+    mk = ind["market"]
+    cs = condition_series(mk).dropna()
+    cond = cs.iloc[-1]
+    run = int((cs[::-1] != cond).values.argmax()) if (cs != cond).any() else len(cs)
+    zs = mk["btc_dist200"].reindex(cs.index).map(zone_of)
+    zone = zs.iloc[-1]
+    zrun = int((zs[::-1] != zone).values.argmax()) if (zs != zone).any() else len(zs)
+    last = mk.loc[cs.index[-1]]
+    f = lambda k: None if not np.isfinite(last.get(k, np.nan)) else round(float(last[k]), 4)
+    mix = lambda n: {CONDITION_LABEL[c]: int((cs.iloc[-n:] == c).sum()) for c in CONDITIONS if (cs.iloc[-n:] == c).any()}
+    return {"bar_date": str(cs.index[-1].date()), "condition": cond, "label": CONDITION_LABEL[cond], "day_of_stretch": run,
+            "zone": zone, "zone_label": ZONE_LABEL[zone], "days_in_zone": zrun,
+            "previous_condition": (CONDITION_LABEL[cs.iloc[-run - 1]] if len(cs) > run else None),
+            "last_10_days": [CONDITION_LABEL[c] for c in cs.iloc[-10:]],
+            "days_by_condition_last_60": mix(60), "days_by_condition_last_365": mix(365),
+            "btc": f("btc"), "btc_vs_200d": f("btc_dist200"), "btc_vs_50d": f("btc_dist50"), "btc_7d": f("btc_ret7"), "btc_30d": f("btc_ret30"),
+            "btc_vol_ratio": f("btc_vol_ratio"), "breadth_above_50d": f("breadth50"), "breadth_above_200d": f("breadth200"),
+            "alts_7d": f("alt_ret7"), "washed_out_share": f("washed"), "flushing_share": f("flush7"), "fear_greed": f("fng"), "stressed": bool(last["stress"] >= 0.5)}
+
+
+def alert_cover(P: dict, cond: str, zone: str) -> dict:
+    """Which live strategies can send an A+ alert in a given condition and zone, per coin tier: an A+ cell for the
+    condition, and (when the zone is blocked) the strategy's own exemption there. Also every strategy's A+
+    conditions on the core list, to see which hold in several conditions and which are specialists."""
+    zs = P.get("zones") or {}
+    blocked, ex = zone in (zs.get("blocked") or []), (zs.get("exempt") or {}).get(zone) or {}
+    tabs = {"core": P.get("grade_table") or {}, "wide": P.get("grade_table_wide") or {}}
+    live = lambda s, c: (P.get("strategies") or {}).get(s, {}).get("enabled") and (not P["strategies"][s].get("market_conditions") or c in P["strategies"][s]["market_conditions"])
+    can, benched = {}, {}
+    for tier, tab in tabs.items():
+        for s, t in tab.items():
+            cell = (t.get(cond) or {})
+            if cell.get("grade") == "A+" and live(s, cond):
+                (benched if blocked and f"{s}|{tier}" not in ex else can).setdefault(s, {})[tier] = round(float(cell.get("p") or 0), 3)
+    by_strategy = {s: [c for c in CONDITIONS if (t.get(c) or {}).get("grade") == "A+" and live(s, c)] for s, t in tabs["core"].items()}
+    by_strategy = {s: v for s, v in by_strategy.items() if v}
+    depth = {CONDITION_LABEL[c]: len([s for s, v in by_strategy.items() if c in v]) for c in CONDITIONS}
+    return {"zone_blocked": blocked, "can_alert": can, "benched_by_zone": benched, "aplus_conditions_by_strategy": by_strategy,
+            "all_weather": sorted([s for s, v in by_strategy.items() if len(v) >= 3]), "aplus_strategies_per_condition": depth}
+
+
 def condition_gate(ind: dict, conds, like: pd.DataFrame) -> pd.DataFrame:
     day = condition_series(ind["market"]).reindex(like.index).isin(list(conds)).values
     return pd.DataFrame(np.broadcast_to(day[:, None], like.shape), index=like.index, columns=like.columns)

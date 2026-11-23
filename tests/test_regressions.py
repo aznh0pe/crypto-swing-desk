@@ -223,6 +223,18 @@ def main():
     # 18. zone judgements are made on settled trades too: fresh one-day marks can never reopen a zone on their own
     src = pathlib.Path(CB.__file__).read_text()
     assert "settled_mask" in src and "passes(x[settled_mask(x)])" in src and "any(verdicts)" in src
+    # 19. the regime is read from the newest bar, and cover respects a blocked zone
+    import engine.indicators as II
+    dd = pd.date_range("2026-01-01", periods=6, freq="D")
+    mkt = pd.DataFrame({"bull": [1, 1, 0, 0, 0, 0], "stress": [0, 1, 1, 1, 0, 0], "btc_dist200": [0.05, 0.02, -0.12, -0.15, -0.16, -0.17]}, index=dd)
+    rg = II.regime_now({"market": mkt})
+    assert rg["condition"] == "bear_calm" and rg["day_of_stretch"] == 2 and rg["zone"] == "slide" and rg["days_in_zone"] == 4 and rg["previous_condition"] == "Bear-market selloff", rg
+    Pc = {"strategies": {"S1": {"enabled": True}, "S2": {"enabled": True}},
+          "grade_table": {"S1": {c: {"grade": "A+", "p": 0.7} for c in II.CONDITIONS}, "S2": {"bear_calm": {"grade": "A+", "p": 0.8}}}, "grade_table_wide": {},
+          "zones": {"blocked": ["slide"], "exempt": {"slide": {"S2|core": {}}}}}
+    cv = II.alert_cover(Pc, "bear_calm", "slide")
+    assert set(cv["can_alert"]) == {"S2"} and set(cv["benched_by_zone"]) == {"S1"} and cv["all_weather"] == ["S1"], cv
+    assert set(II.alert_cover(Pc, "bear_calm", "bull")["can_alert"]) == {"S1", "S2"}
     # a run that updates one alert twice keeps both updates
     wr, od = [], pathlib.Path(tempfile.mkdtemp())
     SC._write(od, wr, "update", "alerts", "a1", {"win_pct": 67}); SC._write(od, wr, "update", "alerts", "a1", {"expiry": {"action": "cancel"}})

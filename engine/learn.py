@@ -259,8 +259,13 @@ def review(data_dir, state_dir, out_dir) -> dict:
     for k, v in by("strategy", rows).items():
         if v["n"] >= 5:
             insights.append(f"{specs.get(k, {}).get('label', k)}: {v['wins']}/{v['n']} graded alerts won ({100 * v['win_rate']:.0f}%).")
-    insights.append(f"Market condition today: {I.CONDITION_LABEL.get(cond_now, cond_now)} (day {run_len} of this stretch). " +
-                    ("Strategies with an A+ record here: " + "; ".join(active_here) + "." if active_here else "No strategy has an A+ record in this condition yet: that is the first research target."))
+    regime = I.regime_now(ind)
+    cover = I.alert_cover(P, regime["condition"], regime["zone"])
+    can_now = [f"{specs.get(s_, {}).get('label', s_)} ({', '.join(('core' if t_ == 'core' else 'wider list') + f' {100 * p_:.0f}%' for t_, p_ in v.items())})" for s_, v in sorted(cover["can_alert"].items())]
+    benched = sorted(specs.get(s_, {}).get("label", s_) for s_ in cover["benched_by_zone"])
+    insights.append(f"Market today: {regime['label']} (day {run_len} of this stretch), {regime['zone_label']} (day {regime['days_in_zone']} in that zone). "
+                    + ("Able to send an A+ alert in exactly this market: " + "; ".join(can_now) + "." if can_now else "Nothing in the live book can send an A+ alert in exactly this market: that is today's first research target.")
+                    + (" A+ for this condition but benched by the danger zone: " + ", ".join(benched) + "." if benched else ""))
     insights.append(f"Coin list: {universe['scanned']} Coinbase coins scanned today ({universe['core']} core, {universe['wide']} wider list) of {universe['listed']} listed"
                     + (f"; joined this week: {', '.join(universe['joined_7d'][:10])}" if universe["joined_7d"] else "") + (f"; dropped out: {', '.join(universe['left_7d'][:10])}" if universe["left_7d"] else "") + ".")
     insights.append(f"Weekly pace: {pace['this_week']} A+ setup{'s' if pace['this_week'] != 1 else ''} served this week, pace {pace['pace']} by today, minimum {pace['min_week']}."
@@ -276,6 +281,8 @@ def review(data_dir, state_dir, out_dir) -> dict:
             opps.append({"area": "Reliability", "text": "A scan reported a problem: " + pr})
     if not aplus_here:
         opps.append({"area": "Coverage", "text": f"No strategy holds an A+ record in today's market ({I.CONDITION_LABEL.get(cond_now, cond_now)}). Today's research goes there first."})
+    elif not can_now:
+        opps.append({"area": "Coverage", "text": f"No strategy can send an A+ alert in today's market ({regime['label']}, {regime['zone_label']}): the ones with an A+ record for the condition are benched by the danger zone. Today's research goes to this market first; a silent book is right only where the lessons show no edge."})
     if pace["behind"]:
         opps.append({"area": "Pace", "text": f"{pace['this_week']} A+ setups this week against a pace of {pace['pace']}. Lower grades lost money in testing, so the gap is closed by new A+ strategies, not by loosening the bar."})
     for key, c in cells.items():
@@ -296,7 +303,8 @@ def review(data_dir, state_dir, out_dir) -> dict:
                "market": {"btc": float(mk["btc"].iloc[-1]), "btc_vs_200d_pct": round(100 * float(mk["btc_dist200"].iloc[-1]), 1), "btc_7d_pct": round(100 * float(mk["btc_ret7"].iloc[-1]), 1),
                           "breadth50_pct": round(100 * float(mk["breadth50"].iloc[-1])), "fear_greed": None if not np.isfinite(mk["fng"].iloc[-1]) else float(mk["fng"].iloc[-1])},
                "graded_today": newly, "shadow": {"featured": a_all, "all": agg(rows)}, "live": live, "by_strategy": by("strategy", rows),
-               "by_condition": by("condition", rows), "changes": changes, "insights": insights, "active_here": active_here,
+               "by_condition": by("condition", rows), "changes": changes, "insights": insights, "active_here": active_here, "regime": regime, "can_alert_now": can_now, "benched_by_zone": benched,
+               "all_weather": [specs.get(s_, {}).get("label", s_) for s_ in cover["all_weather"]], "aplus_strategies_per_condition": cover["aplus_strategies_per_condition"],
                "bar_date": str(w["close"].index[-1].date()), "run_at": now_iso(), "opportunities": opps, "pace": pace, "universe": universe, "runs": runs,
                "account": {"capital": fund["capital"], "cash": fund["cash"], "open": fund["open_count"], "risk": gov["reason"]},
                "notes": "", "research": [], "lessons": []}

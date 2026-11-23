@@ -34,7 +34,7 @@ def seeds() -> list:
     return out
 
 
-def cmd_next(state_dir, out_dir) -> dict:
+def cmd_next(state_dir, out_dir, data_dir=None) -> dict:
     st = load_state(state_dir)
     out = pathlib.Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -54,8 +54,33 @@ def cmd_next(state_dir, out_dir) -> dict:
     for v in list(tested.values()) + list(S.builtin_specs().values()):
         f = v.get("family") or (v.get("spec") or {}).get("family") or "Other"
         fam[f] = fam.get(f, 0) + 1
-    focus = ("No A+ strategy trades in: " + ", ".join(I.CONDITION_LABEL[c] for c in thin) + ". Design for those conditions first." if thin else
-             "Every market condition has at least one A+ strategy. Raise the win rate: look for a filter or a new trigger that beats the weakest A+ cell.")
+    # Two standing priorities, in this order: (1) the market as it is today, (2) strategies that hold in every condition.
+    lab = lambda sid: (S.all_specs(P).get(sid) or {}).get("label", sid)
+    market_now, cover = None, None
+    focus = ""
+    if data_dir:
+        ind, _, _, _ = C.load_ind(data_dir, P)
+        market_now = I.regime_now(ind)
+        cover = I.alert_cover(P, market_now["condition"], market_now["zone"])
+        can = cover["can_alert"]
+        focus += (f"PRIORITY 1, the market today ({market_now['bar_date']} close): {market_now['label']}, day {market_now['day_of_stretch']} of this stretch"
+                  + (f" (before it: {market_now['previous_condition']})" if market_now.get("previous_condition") else "")
+                  + f"; {market_now['zone_label']} (day {market_now['days_in_zone']} in that zone); Bitcoin {100 * (market_now['btc_7d'] or 0):+.1f}% in 7 days, "
+                  f"{100 * (market_now['breadth_above_50d'] or 0):.0f}% of core coins above their 50-day, fear and greed {market_now['fear_greed']:.0f}. "
+                  + ("Able to send an A+ alert in exactly this market: " + "; ".join(f"{lab(s_)} ({', '.join(f'{t_} {100 * p_:.0f}%' for t_, p_ in v.items())})" for s_, v in sorted(can.items())) + ". "
+                     if can else "NOTHING in the live book can send an A+ alert in exactly this market. ")
+                  + ("A+ for this condition but benched by the danger zone (no record of their own in it): " + ", ".join(sorted(lab(s_) for s_ in cover["benched_by_zone"])) + ". " if cover["benched_by_zone"] else "")
+                  + "Today's first own design is written for this market: its condition, its zone and where the stretch stands (first days, late, just ended). "
+                    "Judge it on its record in this market in the training years and on unseen data, win rate first, average trade second. "
+                    "If the lessons already show this exact state has no edge, say so in the journal and test the nearest state that has not been tried; never lower the bar to fill a quiet day. ")
+        aw = cover["all_weather"]
+        focus += ("PRIORITY 2, every market condition: "
+                  + (f"{len(aw)} live strategies grade A+ in three or more of the four conditions ({', '.join(lab(s_) for s_ in aw)}). " if aw else "no live strategy grades A+ in three or more of the four conditions; every one is a specialist. ")
+                  + "A+ strategies per condition (core list): " + ", ".join(f"{k} {v}" for k, v in cover["aplus_strategies_per_condition"].items()) + ". "
+                  "Today's second own design aims at a trade that wins in at least three of the four conditions in both periods (the test's \"fit\" block counts them); "
+                  "an idea that only wins in one condition is a specialist and is judged under priority 1 or on the thinnest condition. ")
+    focus += ("No A+ strategy trades in: " + ", ".join(I.CONDITION_LABEL[c] for c in thin) + ". Design for those conditions first." if thin else
+              "Every market condition has at least one A+ strategy on paper. Raise the win rate: look for a filter or a new trigger that beats the weakest A+ cell.")
     pace = (st["learning"].get("stats") or {}).get("pace") or {}
     if pace:
         focus += (f" Weekly pace: {pace.get('this_week', 0)} A+ setups sent this week against a pace of {pace.get('pace')} by today (minimum {pace.get('min_week')} a week); "
@@ -71,7 +96,7 @@ def cmd_next(state_dir, out_dir) -> dict:
     res = {"next_seed": seed["id"] if seed else None, "spec_file": str((out / "seed_spec.json").resolve()) if seed else None,
            "backlog_left": [s["id"] for s in todo[1:]], "tested": [{"id": k, "label": v.get("label") or (v.get("spec") or {}).get("label"), "family": v.get("family") or (v.get("spec") or {}).get("family"),
                                                                      "verdict": v.get("verdict"), "summary": v.get("summary")} for k, v in sorted(tested.items())],
-           "families_covered": fam, "a_plus_by_condition": live_conds, "focus": focus, "fields": sorted(rules.FRAME_NAMES), "market_fields": sorted(rules.MARKET_NAMES),
+           "families_covered": fam, "a_plus_by_condition": live_conds, "market_now": market_now, "cover": cover, "focus": focus, "fields": sorted(rules.FRAME_NAMES), "market_fields": sorted(rules.MARKET_NAMES),
            "lessons": (st["learning"].get("lessons") or {}).get("items", [])}
     (out / "next.json").write_text(json.dumps(res, indent=1))
     return res
@@ -87,6 +112,35 @@ def overlap(tr: pd.DataFrame, live: pd.DataFrame) -> float:
         for k in range(-2, 3):
             keys.add((tk, d + pd.Timedelta(days=k)))
     return float(np.mean([(tk, d) in keys for tk, d in zip(t["ticker"], t["signal_date"])]))
+
+
+def fit_report(tr: pd.DataFrame, ind: dict, P: dict) -> dict:
+    """How an idea fits the desk's two standing priorities, on core-list trades: its record in the market as it is
+    today (same condition, and same condition and Bitcoin zone), and in how many of the four market conditions it wins
+    in both periods. A condition counts as won with 58%+ wins and a +0.4% average trade on 15+ trades in the training
+    years and 8+ on unseen data."""
+    now = I.regime_now(ind)
+    G, cut = P["grading"], pd.Timestamp(P["split"])
+    t = bt.done(C.tier_of(tr, "core")) if tr is not None and len(tr) else pd.DataFrame(columns=["ret", "signal_date", "condition"])
+    if len(t):
+        t = t.assign(zone=t["signal_date"].map(ind["market"]["btc_dist200"]).map(I.zone_of))
+    def st(x):
+        return {"trades": int(len(x)), "days": int(x["signal_date"].nunique()) if len(x) else 0, "win_rate": round(float((x["ret"] > 0).mean()), 3) if len(x) else None,
+                "avg_ret": round(float(x["ret"].mean()), 4) if len(x) else None}
+    def both(x):
+        return {"train": st(x[x["signal_date"] < cut]), "unseen": st(x[x["signal_date"] >= cut])}
+    won = lambda b: bool(b["train"]["trades"] >= 15 and b["unseen"]["trades"] >= 8 and min(b["train"]["win_rate"], b["unseen"]["win_rate"]) >= G["watch_win"]
+                         and min(b["train"]["avg_ret"], b["unseen"]["avg_ret"]) > 0.004)
+    per = {c: both(t[t["condition"] == c]) if len(t) else both(t) for c in I.CONDITIONS}
+    wins = [c for c in I.CONDITIONS if won(per[c])]
+    cur = per[now["condition"]]
+    curz = both(t[(t["condition"] == now["condition"]) & (t["zone"] == now["zone"])]) if len(t) else both(t)
+    kind = ("all-weather" if len(wins) >= 3 else "current market" if won(curz) or (won(cur) and now["zone"] == "bull") else "specialist" if wins else "none")
+    pc = lambda b: (f"{100 * b['train']['win_rate']:.0f}% of {b['train']['trades']} in training, " if b["train"]["trades"] else "no training trades, ") + (f"{100 * b['unseen']['win_rate']:.0f}% of {b['unseen']['trades']} unseen" if b["unseen"]["trades"] else "no unseen trades")
+    text = (f"Fit: in today's market ({now['label']}, {now['zone_label']}) {pc(curz)}; in {now['label']} overall {pc(cur)}. "
+            f"Wins in {len(wins)} of 4 market conditions in both periods" + (f" ({', '.join(I.CONDITION_LABEL[c] for c in wins)})" if wins else "") + f": {kind}.")
+    return {"kind": kind, "market_now": {k: now[k] for k in ("bar_date", "condition", "label", "zone", "zone_label")}, "current_condition": cur, "current_condition_and_zone": curz,
+            "by_condition": per, "conditions_won": wins, "wins_current_market": bool(won(curz)), "text": text}
 
 
 def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
@@ -130,18 +184,19 @@ def cmd_test(spec_file, data_dir, state_dir, out_dir) -> dict:
         verdict = "watch"
     else:
         verdict = "rejected"
+    fit = fit_report(tr, ind, P)
     f = lambda s: f"{100 * s['win_rate']:.0f}% of {s['trades']} (PF {s.get('profit_factor')}, avg {100 * s['avg_ret']:+.1f}%)" if s.get("trades") else "no trades"
     wd = r.get("wide") or {}
     summary = (f"Training {f(tr_n)}; unseen {f(te)}; " + (f"wider list {f(wd)}; " if wd.get("trades") else "")
-               + f"overlap with live strategies {100 * ov:.0f}%. {r['reason']}")
+               + f"overlap with live strategies {100 * ov:.0f}%. {r['reason']} {fit['text']}")
     rid = spec["id"]
     doc = {"id": rid, "spec": spec, "signature": sig, "about": spec.get("about"), "verdict": verdict, "summary": summary, "tested_at": C.now_iso(), "family": spec.get("family"),
            "label": spec.get("label"), "params": r["params"], "market_conditions": r["market_conditions"], "mode": r["mode"],
-           "source": spec.get("source"), "own_design": "own design" in str((spec.get("source") or {}).get("title", "")).lower()}
+           "fit": fit, "source": spec.get("source"), "own_design": "own design" in str((spec.get("source") or {}).get("title", "")).lower()}
     result = {"id": f"{rid}-{C.now_iso()[:10]}", "idea": rid, "tested_at": C.now_iso(), "verdict": verdict, "overlap": round(ov, 3),
               **{k: r[k] for k in ("label", "family", "params", "enabled", "mode", "market_conditions", "reason", "checks", "train", "oos", "by_condition", "yearly", "rules")}}
     C.write_docs_coll(out, [("research", rid, doc), ("research_results", result["id"], result)])
-    res = {"ok": True, "id": rid, "verdict": verdict, "summary": summary, "by_condition": r["by_condition"], "params": r["params"], "yearly": r["yearly"]}
+    res = {"ok": True, "id": rid, "verdict": verdict, "summary": summary, "fit": fit, "by_condition": r["by_condition"], "params": r["params"], "yearly": r["yearly"]}
     (out / "result.json").write_text(json.dumps(C.clean(res), indent=1))
     print(json.dumps(C.clean(res), indent=1))
     return res
@@ -250,7 +305,7 @@ def main():
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     if a.cmd == "next":
-        print(json.dumps(cmd_next(a.state, a.out), indent=1))
+        print(json.dumps(cmd_next(a.state, a.out, a.data), indent=1))
     elif a.cmd == "test":
         cmd_test(a.spec, a.data, a.state, a.out)
     elif a.cmd == "states":
