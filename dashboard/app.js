@@ -24,7 +24,7 @@ function fp(v) { const n = num(v); if (n === null) return "–"; const a = Math.
   if (a >= 1000) return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   if (a >= 1) return "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
   if (a === 0) return "$0"; const d = Math.min(10, Math.max(4, 4 - Math.floor(Math.log10(a)))); return "$" + n.toFixed(d).replace(/0+$/, "").replace(/\.$/, ""); }
-const qty = (v) => { const n = num(v); return n === null ? "–" : String(+n.toPrecision(6)); };
+const qty = (v) => { const n = num(v); if (n === null) return "–"; return Math.abs(n) >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 4 }) : String(+n.toPrecision(8)); };
 const signCls = (v) => (num(v) > 0 ? "pnl-up" : num(v) < 0 ? "pnl-dn" : "pnl-flat");
 const nowIso = () => new Date().toISOString();
 const fmtDay = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" });
@@ -158,10 +158,10 @@ function tick() {
     const kind = el.dataset.count; let html, cls = "";
     if (kind === "order") {
       if (from && now < from) html = `Order window opens in <b>${span(from - now)}</b> (${dtPT(el.dataset.from)}) and runs to ${dtPT(el.dataset.until)}`;
-      else if (now < until) { html = `Time left to fill: <b>${span(until - now)}</b> · the order expires ${dtPT(el.dataset.until)}`; if (until - now < 3 * 3600000) cls = "urgent"; }
+      else if (now < until) { html = `<span>Time left to fill: <b>${span(until - now)}</b></span><span>The order expires ${dtPT(el.dataset.until)}</span>`; if (until - now < 3 * 3600000) cls = "urgent"; }
       else { html = `Order window ended ${dtPT(el.dataset.until)}`; cls = "over"; }
     } else {
-      if (now < until) { html = `Time left to hold: <b>${span(until - now)}</b> · sell by ${dtPT(el.dataset.until)} if neither level is hit`; if (until - now < 24 * 3600000) cls = "urgent"; }
+      if (now < until) { html = `<span>Time left to hold: <b>${span(until - now)}</b></span><span>Sell by ${dtPT(el.dataset.until)} if neither level is hit</span>`; if (until - now < 24 * 3600000) cls = "urgent"; }
       else { html = `Time is up (since ${dtPT(el.dataset.until)}): sell at market`; cls = "over"; }
     }
     el.innerHTML = html; el.className = "count-strip " + cls;
@@ -291,7 +291,7 @@ function ticket(a) {
       <span class="lk">Stop loss</span><span class="lv">${fp(a.stop)}</span><span class="ld">${spct(a.stop_pct)}</span>
       <span class="lk">R:R</span><span class="lv" style="font-size:13px">${esc(a.rr)}</span><span class="ld">after fees</span>
     </div></div>
-    <div class="t-facts"><div><div class="k">Size</div><div class="v">${qty(a.qty)} ${esc(a.ticker)}</div></div><div><div class="k">Cost</div><div class="v">${money(a.total_cost)}</div></div><div><div class="k">Of portfolio</div><div class="v">${a.pct_of_capital != null ? esc(a.pct_of_capital) + "%" : "–"}</div></div><div><div class="k">Hold</div><div class="v">≤ ${esc(a.hold_max_days)} days</div></div></div>
+    <div class="t-facts"><div><div class="k">Size</div><div class="v">${qty(a.qty)} ${esc(a.ticker)}</div></div><div><div class="k">Cost</div><div class="v">${money(a.total_cost)}</div></div><div><div class="k">Portfolio</div><div class="v">${a.pct_of_capital != null ? esc(a.pct_of_capital) + "%" : "–"}</div></div><div><div class="k">Hold</div><div class="v">≤ ${esc(a.hold_max_days)} days</div></div></div>
     <div class="count-strip" data-count="order" data-from="${esc(a.valid_from)}" data-until="${esc(a.valid_until)}"></div>
     <div class="t-notes">
       <div><b>Order:</b> ${esc(a.order)}</div>
@@ -343,10 +343,10 @@ function positionCard(t, m) {
     : `<div class="pc-status"><div class="k">Status · what to do now</div><div class="lbl">HOLD</div><div class="det">Keep your stop at ${fp(t.stop)} and your limit sell at ${fp(t.target)} resting on the exchange. The next scan checks this position.</div></div>`;
   const lvl = (k, v, s) => `<div><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s || "&nbsp;"}</div></div>`;
   return `<article class="pos-card" id="pos-${kid(t.id)}" aria-label="${esc(t.ticker)} position">
-    <div class="pc-head"><div class="pc-title"><div class="tk">${esc(t.ticker)}</div><div class="st">${t.grade ? `<span class="gchip aplus">${esc(t.grade)}</span>` : ""}${esc(t.strategy_label || t.strategy || "Manual")} · entered ${dtPT(t.entry_at)}</div></div>
+    <div class="pc-head"><div class="pc-title"><div class="tk">${esc(t.ticker)}</div><div class="st">${t.grade ? `<span class="gchip aplus">${esc(t.grade)}</span>` : ""}${esc(t.strategy_label || t.strategy || "Manual")}</div><div class="en">Entered ${dtPT(t.entry_at)}</div></div>
       <div class="pc-pnl"><div class="lbl">Open P&L</div><div class="big ${signCls(pnl)}">${pnl !== null ? smoney(pnl) : "–"}</div><div class="lbl">${pp !== null ? `<span class="${signCls(pp)}">${spct(pp)}</span> · last ${fp(last)}` : "no price yet"}</div></div></div>
     ${status}
-    <div class="pc-levels">${lvl("Entry", fp(entry), `${qty(q)} ${esc(t.ticker)}`)}${lvl("Stop loss", fp(t.stop), entry ? spct((100 * (num(t.stop) - entry)) / entry) : "")}${lvl("Target", fp(t.target), entry ? spct((100 * (num(t.target) - entry)) / entry) : "")}${lvl("Hold day", `${Math.min(day, num(t.hold_max_days) || 7)} of ${esc(t.hold_max_days || 7)}`, `cost ${money(entry * q)}`)}${lvl("Size", share !== null ? share.toFixed(1) + "%" : "–", `of portfolio · ${money(val)}`)}</div>
+    <div class="pc-levels">${lvl("Entry", fp(entry), `cost ${money(entry * q)}`)}${lvl("Stop loss", fp(t.stop), entry ? spct((100 * (num(t.stop) - entry)) / entry) : "")}${lvl("Target", fp(t.target), entry ? spct((100 * (num(t.target) - entry)) / entry) : "")}${lvl("Quantity", qty(q), esc(t.ticker))}${lvl("Size", share !== null ? share.toFixed(1) + "% <small>of portfolio</small>" : "–", `worth ${money(val)}`)}${lvl("Hold day", `${Math.min(day, num(t.hold_max_days) || 7)} of ${esc(t.hold_max_days || 7)}`, `${esc(t.hold_max_days || 7)}-day limit`)}</div>
     <div class="count-strip" data-count="hold" data-until="${new Date(end).toISOString()}"></div>
     <div class="pc-signals"><div class="small"><b>Exit rule:</b> ${esc(t.exit_signal || "Target, stop or the time limit.")}</div></div>
     <div class="pc-actions"><button class="btn primary small" type="button" data-act="close" data-tid="${esc(t.id)}">Record a sale</button><button class="btn ghost small" type="button" data-act="edit" data-tid="${esc(t.id)}">Edit position</button></div>
