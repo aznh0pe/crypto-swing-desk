@@ -648,6 +648,59 @@
      "url": "https://github.com/aznh0pe/crypto-swing-desk"
     }
    }
+  },
+  "R_BAND_SELLOFF_CALMS": {
+   "promoted_at": "2026-11-23T00:35:00Z",
+   "spec": {
+    "id": "R_BAND_SELLOFF_CALMS",
+    "label": "Stretched Coin as a Selloff Calms, Upper Danger Band",
+    "family": "Regime shift",
+    "rev": 2,
+    "about": "Bitcoin is 10 to 25% under its 200-day average, the market was in a selloff on at least three of the last five days, yesterday was still stressed and today is not (the first calm day only), and a coin is still stretched below its 20-day average. Bid at the close and sell the first close back above the 5-day average. Later calm days in this band lose (lesson 41).",
+    "conditions": [
+     "btc_dist200 <= -0.10",
+     "btc_dist200 > -0.25",
+     "stress < 0.5",
+     "stress[1] > 0.5",
+     "rsum(stress, 5) >= 3",
+     "rsi2 < {r}",
+     "dist20 <= {d}"
+    ],
+    "entry": {
+     "kind": "limit_next",
+     "price": "close"
+    },
+    "exit": "sma5",
+    "grid": {
+     "d": [
+      -0.1,
+      -0.15,
+      -0.2
+     ],
+     "r": [
+      20,
+      30,
+      40
+     ]
+    },
+    "max_hold": 6,
+    "params": {
+     "d": -0.15,
+     "r": 30
+    },
+    "stop": {
+     "atr": 2.5
+    },
+    "target": {
+     "atr": 2.5
+    },
+    "universe": "all",
+    "valid_days": 1,
+    "source": {
+     "title": "Crypto Swing Desk own design (2026-11-22), revised 2026-11-23: first calm day only",
+     "url": "https://github.com/aznh0pe/crypto-swing-desk"
+    }
+   }
   }
  },
  "retired": {
