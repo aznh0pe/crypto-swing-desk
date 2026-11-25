@@ -141,6 +141,16 @@ def main():
     assert r["journal"] == (now.normalize() - pd.Timedelta(days=1)).strftime("%Y-%m-%d"), r["journal"]
     j = json.loads((w / "learn" / "journal.json").read_text())
     assert {"opportunities", "pace", "universe", "runs"} <= set(j) and j["universe"]["scanned"] > 0
+    # 10b. lessons the desk files after a mistake are folded into the registry by the next review, once
+    (pathlib.Path(st) / "learning").mkdir(parents=True, exist_ok=True)
+    (pathlib.Path(st) / "learning" / "desk_lessons.json").write_text(json.dumps({"id": "desk_lessons", "items": [{"lesson": "A held trade keeps the basis it was bought on.", "topic": "execution", "evidence": "ZRO"}]}))
+    L.review(w / "data", st, w / "learn2")
+    j2 = json.loads((w / "learn2" / "journal.json").read_text())
+    reg = json.loads((w / "learn2" / "docs" / "learning" / "lessons.json").read_text())
+    assert j2["lessons"] and j2["opportunities"][0]["area"] == "Desk lessons" and reg["items"][-1]["from"] == "desk"
+    (pathlib.Path(st) / "learning" / "lessons.json").write_text(json.dumps(reg))
+    L.review(w / "data", st, w / "learn3")
+    assert not (w / "learn3" / "docs" / "learning" / "lessons.json").exists()
 
     # 11. the radar explains what is missing in plain words
     assert rules.plain_condition("ret7 <= -0.3")[0] == "7-day change at or below -30.0%" and rules.plain_condition("rsi2 < 8")[0] == "RSI(2) below 8"

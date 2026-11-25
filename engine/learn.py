@@ -313,8 +313,26 @@ def review(data_dir, state_dir, out_dir) -> dict:
              "by_tier": by("tier", rows), "pace": pace, "universe": universe, "runs": runs, "live": live, "live_by_strategy": live_by}
     adjust = {"id": "adjust", "updated_at": now_iso(), "paused": paused, "cells": cells}
     governor = {"id": "governor", "updated_at": now_iso(), **gov}
+    # Desk lessons: after a mistake or a test, the main desk session files what it learned in learning/desk_lessons.
+    # Every review folds the new ones into the lessons registry (never trimmed) and shows them at the top of the day's
+    # opportunities, so a mistake made once is read by every later run.
+    docs = [("journal", jid, journal), ("learning", "stats", stats), ("learning", "adjust", adjust), ("learning", "governor", governor)]
+    desk = list((state["learning"].get("desk_lessons") or {}).get("items") or [])
+    if desk:
+        reg = dict(state["learning"].get("lessons") or {"id": "lessons", "items": []})
+        items = list(reg.get("items") or [])
+        have = {str(i.get("lesson", "")).strip().lower() for i in items}
+        new = [d for d in desk if str(d.get("lesson", "")).strip() and str(d.get("lesson", "")).strip().lower() not in have]
+        for d in new:
+            items.append({"n": len(items) + 1, "date": str(d.get("date") or now_iso()[:10]), "topic": d.get("topic") or "operations",
+                          "lesson": str(d["lesson"]).strip(), "evidence": str(d.get("evidence") or "").strip(), "from": "desk"})
+        if new:
+            reg.update({"id": "lessons", "items": items, "updated_at": now_iso()})
+            docs.append(("learning", "lessons", reg))
+            journal["lessons"] = [d["lesson"] for d in new]
+            opps.insert(0, {"area": "Desk lessons", "text": f"{len(new)} lesson(s) filed by the desk after a mistake or a test were added to the registry today. Read them before any research: " + " | ".join(str(d["lesson"]).strip() for d in new)})
     writes = []
-    for coll, did, doc in (("journal", jid, journal), ("learning", "stats", stats), ("learning", "adjust", adjust), ("learning", "governor", governor)):
+    for coll, did, doc in docs:
         p = out / "docs" / coll / f"{did}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(json.dumps(clean(doc), default=str))
