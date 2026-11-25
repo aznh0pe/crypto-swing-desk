@@ -565,7 +565,7 @@ function fillModal(a) {
     const id = uid("t");
     await setDoc("trades/" + id, { id, ticker: a.ticker, product: a.product, strategy: a.strategy, strategy_label: a.strategy_label, grade: a.grade, condition: a.condition, status: "open",
       entry_price: price, qty: q, fee_in: fee, entry_at: at.toISOString(), stop: num(a.stop), target: num(a.target), planned_entry: num(a.entry), hold_max_days: num(a.hold_max_days) || 7,
-      dyn_exit: a.dyn_exit || "none", exit_signal: a.exit_signal || "", atr: num(a.atr), win_pct: num(a.win_pct), score: num(a.score), alert_id: a.id, created_at: nowIso() });
+      dyn_exit: a.dyn_exit || "none", exit_signal: a.exit_signal || "", atr: num(a.atr), win_pct: num(a.win_pct), score: num(a.score), alert_id: a.id, tier: a.tier || null, zone: a.zone || null, zone_cell: !!a.zone_cell, created_at: nowIso() });
     await updDoc("alerts/" + a.id, { status: "filled", trade_id: id, filled_at: at.toISOString(), actual_price: price, actual_qty: q });
     toast(`${a.ticker} position saved. Now place the stop at ${fp(a.stop)} and the limit sell at ${fp(a.target)} on your exchange.`, 8000); S.tab = "alerts";
   });

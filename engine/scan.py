@@ -327,7 +327,9 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
                 "detail": f"The strategy's exit signal fired on the last daily close. {DYN_TEXT.get(dyn, '')} Sell at market and cancel the stop and target orders."}
     zs = P.get("zones") or {}
     zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
-    if zone in (zs.get("blocked") or []) and tr.get("strategy") and c is not None:
+    # the zone exit is for trades bought while the zone was open; a trade bought on its own record inside
+    # the zone (zone_cell) keeps that basis for life and is managed by its stop, target, exit signal and time stop
+    if zone in (zs.get("blocked") or []) and tr.get("strategy") and c is not None and not tr.get("zone_cell"):
         # the tier the trade was bought on (its alert), not today's volume: a coin that slips under the core
         # volume line mid-hold is still the core-list trade that was sent
         tier = tr.get("tier") or ("core" if bool(ind["is_core"][tk].iloc[-1]) else "wide")
@@ -484,7 +486,11 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     for tr in [t for t in state["trades"].values() if t.get("status") == "open"]:
         try:
             a0 = state["alerts"].get(tr.get("alert_id") or "") or {}
-            st = check_position({**tr, "tier": tr.get("tier") or a0.get("tier")}, ind, w, part, hourly, px, P, mode, now)
+            # a held trade is judged on the basis it was bought on (coin tier, bought on its own zone record),
+            # never on a reclassification since: that is how ZRO got a wrong sell call on 25 Nov
+            basis = {"tier": tr.get("tier") or a0.get("tier"),
+                     "zone_cell": tr.get("zone_cell") if tr.get("zone_cell") is not None else a0.get("zone_cell")}
+            st = check_position({**tr, **basis}, ind, w, part, hourly, px, P, mode, now)
         except Exception as e:
             st = {"trade_id": tr.get("id"), "ticker": tr.get("ticker"), "code": "ERROR", "label": "CHECK BY HAND", "tone": "act", "detail": f"Could not evaluate this position ({e}). Check its stop and target on your exchange."}
             errors.append(f"position {tr.get('ticker')}: {e}"[:160])
