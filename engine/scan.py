@@ -328,7 +328,9 @@ def check_position(tr: dict, ind, w, part, hourly, px: dict, P: dict, mode: str,
     zs = P.get("zones") or {}
     zone = I.zone_of(ind["market"]["btc_dist200"].iloc[-1])
     if zone in (zs.get("blocked") or []) and tr.get("strategy") and c is not None:
-        tier = "core" if bool(ind["is_core"][tk].iloc[-1]) else "wide"
+        # the tier the trade was bought on (its alert), not today's volume: a coin that slips under the core
+        # volume line mid-hold is still the core-list trade that was sent
+        tier = tr.get("tier") or ("core" if bool(ind["is_core"][tk].iloc[-1]) else "wide")
         if f"{tr['strategy']}|{tier}" not in ((zs.get("exempt") or {}).get(zone) or {}):
             row = (zs.get("table") or {}).get(zone) or {}
             fee = P["costs"]
@@ -481,7 +483,8 @@ def run(mode: str, data_dir, state_dir, out_dir, now=None) -> dict:
     positions, exit_alerts = [], []
     for tr in [t for t in state["trades"].values() if t.get("status") == "open"]:
         try:
-            st = check_position(tr, ind, w, part, hourly, px, P, mode, now)
+            a0 = state["alerts"].get(tr.get("alert_id") or "") or {}
+            st = check_position({**tr, "tier": tr.get("tier") or a0.get("tier")}, ind, w, part, hourly, px, P, mode, now)
         except Exception as e:
             st = {"trade_id": tr.get("id"), "ticker": tr.get("ticker"), "code": "ERROR", "label": "CHECK BY HAND", "tone": "act", "detail": f"Could not evaluate this position ({e}). Check its stop and target on your exchange."}
             errors.append(f"position {tr.get('ticker')}: {e}"[:160])

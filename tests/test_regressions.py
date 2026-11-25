@@ -175,6 +175,11 @@ def main():
     tier0 = "core" if bool(indz["is_core"][tk0].iloc[-1]) else "wide"
     Pz["zones"]["exempt"] = {zone: {f"{sid}|{tier0}": {"p": 0.67, "n": 49, "days": 17}}}
     assert SC.check_position(trade, indz, wd0, part0, None, px0, Pz, "check", now)["code"] == "HOLD"
+    # 13b. the exemption follows the tier the trade was bought on, not today's volume (ZRO, 25 Nov)
+    other = "wide" if tier0 == "core" else "core"
+    Pz["zones"]["exempt"] = {zone: {f"{sid}|{other}": {"p": 0.67, "n": 49, "days": 17}}}
+    assert SC.check_position({**trade, "tier": other}, indz, wd0, part0, None, px0, Pz, "check", now)["code"] == "HOLD"
+    assert SC.check_position(trade, indz, wd0, part0, None, px0, Pz, "check", now)["code"] == "ZONE_EXIT"
     # 14. the book stamp changes when a zone opens or closes, so the next scan re-grades live tickets
     assert SC.book_id({**P0, "zones": {"blocked": ["slide"], "exempt": {}}}) != b0
     # 15. an order past its window is judged on the window alone, and the verdict is an instruction
