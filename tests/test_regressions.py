@@ -223,6 +223,7 @@ def main():
     # 18. zone judgements are made on settled trades too: fresh one-day marks can never reopen a zone on their own
     src = pathlib.Path(CB.__file__).read_text()
     assert "settled_mask" in src and "passes(x[settled_mask(x)])" in src and "any(verdicts)" in src
+    assert "aside.add((zone" in src and "in aside for z_" in src      # near-miss winners never lift the rest of the book
     # 19. the regime is read from the newest bar, and cover respects a blocked zone
     import engine.indicators as II
     dd = pd.date_range("2026-01-01", periods=6, freq="D")

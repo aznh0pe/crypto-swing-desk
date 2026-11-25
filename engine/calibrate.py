@@ -255,7 +255,7 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     settled_mask = lambda df: ((df["reason"] != "mark") if "reason" in df else True) & ((df["signal_date"] <= last_sig - pd.Timedelta(days=7)) if last_sig is not None else True)
     # 1. Each strategy x coin tier is judged on its own record inside each zone: one that clears the full A+ bar
     #    there has earned its place in that zone whatever the rest of the book does.
-    exempt = {}
+    exempt, aside = {}, set()
     for (zone, sid, tier), x in apz_all.groupby(["zone", "strategy", "tier"]):
         tr_, un_ = x[x["signal_date"] < cut], x[x["signal_date"] >= cut]
         n, days = len(x), x["signal_date"].nunique()
@@ -272,12 +272,18 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
             return bool(n >= G.get("wide_min_n", 40) and days >= G.get("wide_min_days", 15) and p >= G["aplus_win"] and float(x["ret"].mean()) > 0.004 and dwin >= G.get("aplus_day_win", 0.58)
                         and len(tr_) >= 10 and len(un_) >= 5 and float((tr_["ret"] > 0).mean()) >= G["watch_win"] and float((un_["ret"] > 0).mean()) >= G["watch_win"])
         ok = passes(x) and passes(x[settled_mask(x)])      # an exemption must hold without its freshest trades too
+        # A strategy that wins in the zone on its own record but falls short of the exemption bar is set aside too:
+        # its trades must never lift the rest of the book over the block test (2026-11-24: one at 65.7% against 66%
+        # reopened the zone for every strategy that loses there). It stays blocked in the zone like the rest.
+        edge = lambda y: bool(len(y) >= 20 and float((y["ret"] > 0).mean()) >= G["watch_win"] and float(y["ret"].mean()) > 0.004)
+        if not ok and edge(x) and edge(x[settled_mask(x)]):
+            aside.add((zone, f"{sid}|{tier}"))
         if ok:
             exempt.setdefault(zone, {})[f"{sid}|{tier}"] = {"p": round(p, 4), "n": int(n), "days": int(days), "day_win": round(dwin, 3), "avg_ret": round(float(x["ret"].mean()), 4),
                                                             "train": round(float((tr_["ret"] > 0).mean()), 3), "oos": round(float((un_["ret"] > 0).mean()), 3)}
     # 2. A zone is judged on the rest of the book: strategies that earned their own place there must not lift the
     #    zone's average and so reopen it to the strategies that lose in it.
-    isx = pd.Series([f"{s_}|{t_}" in (exempt.get(z_) or {}) for z_, s_, t_ in zip(apz_all["zone"], apz_all["strategy"], apz_all["tier"])], index=apz_all.index, dtype=bool)
+    isx = pd.Series([f"{s_}|{t_}" in (exempt.get(z_) or {}) or (z_, f"{s_}|{t_}") in aside for z_, s_, t_ in zip(apz_all["zone"], apz_all["strategy"], apz_all["tier"])], index=apz_all.index, dtype=bool)
     ap = one_per_coin(apz_all[~isx])
     table, blocked = {}, []
     stat = lambda y: {"trades": int(len(y)), "days": int(y["signal_date"].nunique()), "win_rate": round(float((y["ret"] > 0).mean()), 3) if len(y) else None,
@@ -301,7 +307,7 @@ def apply_zones(g: pd.DataFrame, ind: dict, P: dict) -> tuple[pd.DataFrame, dict
     exempt = {z: v for z, v in exempt.items() if z in blocked}
     keep = pd.Series([f"{s}|{t}" in (exempt.get(z) or {}) for z, s, t in zip(g["zone"], g["strategy"], g["tier"])], index=g.index)
     g.loc[(g["grade"] == "A+") & g["zone"].isin(blocked) & ~keep, "grade"] = "A"
-    return g, {"blocked": blocked, "table": table, "exempt": exempt,
+    return g, {"blocked": blocked, "table": table, "exempt": exempt, "set_aside": sorted(f"{z}: {k}" for z, k in aside),
                "rule": f"A zone is blocked when A+ setups there make no real edge (an average trade under +{100 * R['avg']:.1f}% that either loses money or wins under {100 * R['win']:.0f}%), in the training years and on unseen data alike, on {R['min_n']}+ trades over {R['min_days']}+ days. A strategy still trades a blocked zone on a coin tier where its own record there clears the full A+ bar (40+ trades on 15+ days, both periods). Re-tested at every calibration."}
 
 
