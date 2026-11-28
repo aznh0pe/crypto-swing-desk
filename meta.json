@@ -1,0 +1,19 @@
+{
+ "generated_utc": "2026-11-28T20:00:46.126548+00:00",
+ "finished_utc": "2026-11-28T20:02:32.760158+00:00",
+ "source": "Coinbase Exchange public API",
+ "mode": "quick",
+ "history_built": "2026-11-24T03:00:46.307746+00:00",
+ "last_daily_bar": "2026-11-27",
+ "partial_day": "2026-11-28",
+ "pairs": 475,
+ "listed": 383,
+ "tradable": 158,
+ "core": 31,
+ "new_coins": [],
+ "rows": 508682,
+ "first_bar": "2017-01-01",
+ "daily_rewritten": false,
+ "hourly_last": "2026-11-28T20:00Z",
+ "problems": []
+}
